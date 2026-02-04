@@ -6,6 +6,7 @@ Full game with all features
 import pygame
 import sys
 import random
+import math
 
 from game.level_manager import LevelManager
 from game.game_state import GameStateManager, GameState, GameFlow
@@ -13,10 +14,11 @@ from game.ui_manager import UIManager
 from game.collision import CollisionHandler
 from game.fog_of_war import FogManager
 from game.save_manager import SaveManager
+from game.camera import CameraManager
 from entities.particle import ParticleSystem, ParticleEffects
 from maze.generator import GEN_ALGOS
 from utils.constants import (
-    CELL_SIZE, FPS, PANEL_H,
+    FPS, PANEL_H,
     DIFFICULTY_EASY, DIFFICULTY_NORMAL, DIFFICULTY_HARD,
     DIFFICULTY_EXPERT, DIFFICULTY_NIGHTMARE,
     DIFFICULTY_NAMES, TOP, RIGHT, BOTTOM, LEFT
@@ -46,6 +48,10 @@ class MazeGame:
         self.fog_manager = FogManager()
         self.particle_system = ParticleSystem()
         self.particle_effects = ParticleEffects(self.particle_system)
+
+        # Camera system
+        self.camera_manager = CameraManager()
+        self.cell_size = 35  # Will be updated by camera
 
         # Save/Load
         self.save_manager = SaveManager()
@@ -87,10 +93,23 @@ class MazeGame:
         pygame.display.set_caption(f"{GAME_TITLE} v{GAME_VERSION}")
 
     def _resize_screen_for_level(self, level):
-        """Resize screen to fit level"""
-        width = level.cols * CELL_SIZE
-        height = level.rows * CELL_SIZE + PANEL_H
-        self._create_screen(width, height)
+        """Resize screen to fit level using camera system"""
+        # Let camera calculate optimal settings
+        screen_w, screen_h, cell_size, use_camera = self.camera_manager.setup_for_level(
+            level.cols, level.rows, PANEL_H
+        )
+
+        self.cell_size = cell_size
+        self._create_screen(screen_w, screen_h)
+
+        # Reset camera position
+        self.camera_manager.reset()
+
+        # Log camera mode for debugging
+        if use_camera:
+            print(f"Camera mode: ON (maze {level.cols}x{level.rows}, cell size {cell_size})")
+        else:
+            print(f"Camera mode: OFF (maze {level.cols}x{level.rows}, cell size {cell_size})")
 
     def handle_events(self):
         """Handle input events"""
@@ -347,6 +366,9 @@ class MazeGame:
         # Update level
         result = self.game_flow.update(dt)
 
+        # Update camera to follow player
+        self.camera_manager.update(dt, level.player)
+
         # Update fog of war
         self.fog_manager.update(dt, level.player, level)
 
@@ -563,7 +585,7 @@ class MazeGame:
         if not level or not level.walls:
             return
 
-        maze_h = level.rows * CELL_SIZE
+        maze_h = self.camera_manager.get_maze_area_height()
         pygame.draw.rect(self.screen, COLOR_MAZE_BG, (0, 0, self.screen_w, maze_h))
 
         # Draw maze walls
@@ -586,10 +608,10 @@ class MazeGame:
         if not level:
             return
 
-        maze_h = level.rows * CELL_SIZE
+        maze_h = self.camera_manager.get_maze_area_height()
         pygame.draw.rect(self.screen, COLOR_MAZE_BG, (0, 0, self.screen_w, maze_h))
 
-        # Draw entities
+        # Draw entities (order matters for layering)
         self._draw_goal(level)
         self._draw_keys(level)
         self._draw_doors(level)
@@ -603,11 +625,15 @@ class MazeGame:
         # Draw maze walls
         self._draw_maze(level.walls, level.cols, level.rows)
 
-        # Draw particles (before fog so fog covers them)
-        self.particle_system.render(self.screen)
+        # Draw particles with camera offset
+        self._render_particles()
 
-        # Draw fog of war
-        self.fog_manager.render(self.screen, level.player)
+        # Draw fog of war with camera support
+        self._render_fog(level)
+
+        # Draw camera mode indicator
+        if self.camera_manager.uses_camera():
+            self._draw_minimap(level)
 
         # Draw HUD
         self.ui_manager.draw_hud(
@@ -620,15 +646,23 @@ class MazeGame:
             self._draw_save_message()
 
     def _draw_maze(self, walls, cols, rows):
-        """Draw maze walls"""
-        for y in range(rows):
-            for x in range(cols):
+        """Draw maze walls - only visible cells for performance"""
+        # Get visible range from camera
+        min_x, max_x, min_y, max_y = self.camera_manager.get_visible_range()
+
+        for y in range(min_y, max_y):
+            for x in range(min_x, max_x):
+                if x < 0 or x >= cols or y < 0 or y >= rows:
+                    continue
+
                 idx = y * cols + x
                 w = walls[idx]
-                x0 = x * CELL_SIZE
-                y0 = y * CELL_SIZE
-                x1 = x0 + CELL_SIZE
-                y1 = y0 + CELL_SIZE
+
+                # Convert to screen coordinates
+                sx, sy = self.camera_manager.world_to_screen(x, y)
+                x0, y0 = sx, sy
+                x1 = x0 + self.cell_size
+                y1 = y0 + self.cell_size
 
                 if w & TOP:
                     pygame.draw.line(self.screen, COLOR_WALL, (x0, y0), (x1, y0), 3)
@@ -640,59 +674,83 @@ class MazeGame:
                     pygame.draw.line(self.screen, COLOR_WALL, (x0, y0), (x0, y1), 3)
 
     def _draw_cell(self, x, y, color, pad=6):
-        """Draw filled cell"""
-        rx = x * CELL_SIZE + pad
-        ry = y * CELL_SIZE + pad
-        rw = CELL_SIZE - pad * 2
-        rh = CELL_SIZE - pad * 2
-        pygame.draw.rect(self.screen, color, (rx, ry, rw, rh), border_radius=6)
+        """Draw filled cell with camera support"""
+        # Skip if not visible
+        if not self.camera_manager.is_visible(x, y):
+            return
+
+        # Convert to screen coordinates
+        sx, sy = self.camera_manager.world_to_screen(x, y)
+        rx = sx + pad
+        ry = sy + pad
+        rw = self.cell_size - pad * 2
+        rh = self.cell_size - pad * 2
+
+        # Scale padding for smaller cells
+        if self.cell_size < 25:
+            pad = max(2, pad - 2)
+            rx = sx + pad
+            ry = sy + pad
+            rw = self.cell_size - pad * 2
+            rh = self.cell_size - pad * 2
+
+        pygame.draw.rect(self.screen, color, (rx, ry, rw, rh), border_radius=max(3, 6 * self.cell_size // 35))
 
     def _draw_goal(self, level):
-        if self.fog_manager.is_visible(level.goal_pos[0], level.goal_pos[1]):
-            self._draw_cell(level.goal_pos[0], level.goal_pos[1], COLOR_GOAL)
+        gx, gy = level.goal_pos
+        if self.camera_manager.is_visible(gx, gy) and self.fog_manager.is_visible(gx, gy):
+            self._draw_cell(gx, gy, COLOR_GOAL)
 
     def _draw_keys(self, level):
         for key in level.door_manager.keys:
-            if not key.collected and self.fog_manager.is_visible(key.x, key.y):
-                self._draw_cell(key.x, key.y, key.get_color_rgb(), pad=8)
+            if not key.collected:
+                if self.camera_manager.is_visible(key.x, key.y) and self.fog_manager.is_visible(key.x, key.y):
+                    self._draw_cell(key.x, key.y, key.get_color_rgb(), pad=8)
 
     def _draw_doors(self, level):
         for door in level.door_manager.doors:
-            if door.locked and self.fog_manager.is_visible(door.x, door.y):
-                self._draw_cell(door.x, door.y, door.get_color_rgb(), pad=4)
+            if door.locked:
+                if self.camera_manager.is_visible(door.x, door.y) and self.fog_manager.is_visible(door.x, door.y):
+                    self._draw_cell(door.x, door.y, door.get_color_rgb(), pad=4)
 
     def _draw_powerups(self, level):
         for powerup in level.powerup_manager.get_uncollected_powerups():
-            if self.fog_manager.is_visible(powerup.x, powerup.y):
+            if self.camera_manager.is_visible(powerup.x, powerup.y) and self.fog_manager.is_visible(powerup.x, powerup.y):
                 self._draw_cell(powerup.x, powerup.y, powerup.get_color(), pad=8)
 
     def _draw_traps(self, level):
         for trap in level.trap_manager.get_visible_traps():
-            if self.fog_manager.is_visible(trap.x, trap.y):
+            if self.camera_manager.is_visible(trap.x, trap.y) and self.fog_manager.is_visible(trap.x, trap.y):
                 self._draw_cell(trap.x, trap.y, trap.get_color(), pad=10)
 
     def _draw_enemies(self, level):
         for enemy in level.enemy_manager.enemies:
-            if self.fog_manager.is_visible(enemy.x, enemy.y):
+            if self.camera_manager.is_visible(enemy.x, enemy.y) and self.fog_manager.is_visible(enemy.x, enemy.y):
                 self._draw_cell(enemy.x, enemy.y, enemy.get_color(), pad=7)
 
     def _draw_boss(self, level):
-        """Draw boss enemy"""
+        """Draw boss enemy with camera support"""
         boss = level.boss_manager.get_boss()
         if not boss or not boss.alive:
+            return
+
+        if not self.camera_manager.is_visible(boss.x, boss.y):
             return
 
         if not self.fog_manager.is_visible(boss.x, boss.y):
             return
 
+        # Convert to screen coordinates
+        sx, sy = self.camera_manager.world_to_screen(boss.x, boss.y)
+
         # Draw boss (larger than normal enemies)
         color = boss.get_color()
         pad = int(3 * boss.size_multiplier)
 
-        rx = boss.x * CELL_SIZE + pad
-        ry = boss.y * CELL_SIZE + pad
-        rw = CELL_SIZE - pad * 2
-        rh = CELL_SIZE - pad * 2
+        rx = sx + pad
+        ry = sy + pad
+        rw = self.cell_size - pad * 2
+        rh = self.cell_size - pad * 2
 
         # Main body
         pygame.draw.rect(self.screen, color, (rx, ry, rw, rh), border_radius=8)
@@ -700,22 +758,24 @@ class MazeGame:
         # Draw telegraphing indicator
         if boss.is_telegraphing():
             # Pulsing warning effect
-            import math
             pulse = int(abs(math.sin(pygame.time.get_ticks() * 0.01)) * 100)
             warning_color = (255, pulse + 100, 0)
             pygame.draw.rect(self.screen, warning_color, (rx-2, ry-2, rw+4, rh+4), 3, border_radius=10)
 
-        # Phase indicator
-        if boss.phase >= 2:
+        # Phase indicator (scale for cell size)
+        horn_scale = self.cell_size / 35
+        if boss.phase >= 2 and self.cell_size >= 20:
             # Draw horns for phase 2+
+            h_offset = int(5 * horn_scale)
+            h_size = int(10 * horn_scale)
             pygame.draw.polygon(self.screen, (100, 50, 50), [
-                (rx + 5, ry), (rx + 10, ry - 8), (rx + 15, ry)
+                (rx + h_offset, ry), (rx + h_offset + h_size//2, ry - int(8 * horn_scale)), (rx + h_offset + h_size, ry)
             ])
             pygame.draw.polygon(self.screen, (100, 50, 50), [
-                (rx + rw - 15, ry), (rx + rw - 10, ry - 8), (rx + rw - 5, ry)
+                (rx + rw - h_offset - h_size, ry), (rx + rw - h_offset - h_size//2, ry - int(8 * horn_scale)), (rx + rw - h_offset, ry)
             ])
 
-        if boss.phase >= 3:
+        if boss.phase >= 3 and self.cell_size >= 20:
             # Draw aura for phase 3
             aura_color = (255, 100, 100, 100)
             aura_surf = pygame.Surface((rw + 20, rh + 20), pygame.SRCALPHA)
@@ -724,10 +784,10 @@ class MazeGame:
 
         # Draw boss health bar above boss
         if level.boss_manager.fight_started:
-            bar_w = CELL_SIZE
+            bar_w = self.cell_size
             bar_h = 6
-            bar_x = boss.x * CELL_SIZE
-            bar_y = boss.y * CELL_SIZE - 10
+            bar_x = sx
+            bar_y = sy - 10
 
             # Background
             pygame.draw.rect(self.screen, (50, 50, 50), (bar_x, bar_y, bar_w, bar_h))
@@ -739,22 +799,158 @@ class MazeGame:
             pygame.draw.rect(self.screen, (200, 200, 200), (bar_x, bar_y, bar_w, bar_h), 1)
 
     def _draw_player(self, level):
-        # Player is always visible
+        """Draw player - always visible"""
         self._draw_cell(level.player.x, level.player.y, COLOR_PLAYER)
 
     def _draw_moving_walls(self, level):
-        """Draw moving walls"""
+        """Draw moving walls with camera support"""
         for wall in level.moving_wall_manager.walls:
-            if self.fog_manager.is_visible(wall.x, wall.y):
-                # Draw with glow effect
-                color = wall.get_glow_color()
-                self._draw_cell(wall.x, wall.y, color, pad=3)
-                # Draw border
-                rx = wall.x * CELL_SIZE + 3
-                ry = wall.y * CELL_SIZE + 3
-                rw = CELL_SIZE - 6
-                rh = CELL_SIZE - 6
-                pygame.draw.rect(self.screen, (200, 200, 255), (rx, ry, rw, rh), 2, border_radius=4)
+            if not self.camera_manager.is_visible(wall.x, wall.y):
+                continue
+            if not self.fog_manager.is_visible(wall.x, wall.y):
+                continue
+
+            # Draw with glow effect
+            color = wall.get_glow_color()
+            self._draw_cell(wall.x, wall.y, color, pad=3)
+
+            # Draw border
+            sx, sy = self.camera_manager.world_to_screen(wall.x, wall.y)
+            rx = sx + 3
+            ry = sy + 3
+            rw = self.cell_size - 6
+            rh = self.cell_size - 6
+            pygame.draw.rect(self.screen, (200, 200, 255), (rx, ry, rw, rh), 2, border_radius=4)
+
+    def _render_particles(self):
+        """Render particles with camera offset"""
+        base_cell_size = 35  # Original cell size used in particle creation
+
+        for particle in self.particle_system.particles:
+            if not particle.alive:
+                continue
+
+            # Convert from original pixel coords to cell coords
+            cell_x = particle.x / base_cell_size
+            cell_y = particle.y / base_cell_size
+
+            if not self.camera_manager.is_visible(cell_x, cell_y):
+                continue
+
+            # Convert to screen coordinates
+            sx, sy = self.camera_manager.world_to_screen(cell_x, cell_y)
+
+            # Scale particle size based on cell size ratio
+            scale = self.cell_size / base_cell_size
+            size = max(1, int(particle.size * scale))
+
+            # Calculate alpha based on lifetime (same as particle.render does)
+            if particle.fade:
+                alpha = int(255 * (particle.lifetime / particle.max_lifetime))
+            else:
+                alpha = 255
+
+            if size > 0 and alpha > 0:
+                color = (*particle.color[:3], alpha)
+
+                surf = pygame.Surface((size * 2, size * 2), pygame.SRCALPHA)
+                pygame.draw.circle(surf, color, (size, size), size)
+                self.screen.blit(surf, (sx - size, sy - size))
+
+    def _render_fog(self, level):
+        """Render fog of war with camera support"""
+        if not self.fog_manager.fog or not self.fog_manager.enabled:
+            return
+
+        if self.fog_manager.xray_active:
+            return
+
+        fog = self.fog_manager.fog
+        maze_h = self.camera_manager.get_maze_area_height()
+
+        # Create fog surface for visible area only
+        fog_surface = pygame.Surface((self.screen_w, maze_h), pygame.SRCALPHA)
+
+        # Get visible range
+        min_x, max_x, min_y, max_y = self.camera_manager.get_visible_range()
+
+        # Get player vision range
+        vision_range = level.player.stats['vision_range']
+
+        for y in range(min_y, max_y):
+            for x in range(min_x, max_x):
+                if x < 0 or x >= level.cols or y < 0 or y >= level.rows:
+                    continue
+
+                # Get screen position
+                sx, sy = self.camera_manager.world_to_screen(x, y)
+
+                # Get visibility level for this cell (0.0 = invisible, 1.0 = visible)
+                visibility = fog.get_cell_visibility(x, y, level.player.x, level.player.y, vision_range)
+
+                if visibility < 1.0:
+                    # Calculate fog alpha (0 = visible, 255 = completely dark)
+                    alpha = int((1.0 - visibility) * 255)
+                    alpha = min(255, max(0, alpha))
+
+                    pygame.draw.rect(
+                        fog_surface,
+                        (10, 12, 18, alpha),
+                        (sx, sy, self.cell_size, self.cell_size)
+                    )
+
+        self.screen.blit(fog_surface, (0, 0))
+
+    def _draw_minimap(self, level):
+        """Draw minimap when in camera mode"""
+        # Minimap dimensions
+        map_w = 150
+        map_h = 100
+        map_x = self.screen_w - map_w - 10
+        map_y = 10
+
+        # Background
+        pygame.draw.rect(self.screen, (20, 22, 28, 200), (map_x - 2, map_y - 2, map_w + 4, map_h + 4), border_radius=5)
+        pygame.draw.rect(self.screen, (40, 45, 55), (map_x, map_y, map_w, map_h), border_radius=3)
+
+        # Scale factors
+        scale_x = map_w / level.cols
+        scale_y = map_h / level.rows
+
+        # Draw explored areas
+        if self.fog_manager.fog and self.fog_manager.enabled:
+            for y in range(level.rows):
+                for x in range(level.cols):
+                    if self.fog_manager.fog.explored[y][x]:
+                        px = map_x + int(x * scale_x)
+                        py = map_y + int(y * scale_y)
+                        pygame.draw.rect(self.screen, (60, 65, 75), (px, py, max(1, int(scale_x)), max(1, int(scale_y))))
+        else:
+            # No fog - show entire maze
+            pygame.draw.rect(self.screen, (50, 55, 65), (map_x, map_y, map_w, map_h))
+
+        # Draw goal
+        gx = map_x + int(level.goal_pos[0] * scale_x)
+        gy = map_y + int(level.goal_pos[1] * scale_y)
+        pygame.draw.rect(self.screen, COLOR_GOAL, (gx, gy, max(3, int(scale_x * 2)), max(3, int(scale_y * 2))))
+
+        # Draw player
+        px = map_x + int(level.player.x * scale_x)
+        py = map_y + int(level.player.y * scale_y)
+        pygame.draw.rect(self.screen, COLOR_PLAYER, (px, py, max(3, int(scale_x * 2)), max(3, int(scale_y * 2))))
+
+        # Draw viewport rectangle
+        camera = self.camera_manager.camera
+        vx = map_x + int(camera.camera_x * scale_x)
+        vy = map_y + int(camera.camera_y * scale_y)
+        vw = int(camera.viewport_cols * scale_x)
+        vh = int(camera.viewport_rows * scale_y)
+        pygame.draw.rect(self.screen, (255, 255, 255), (vx, vy, vw, vh), 1)
+
+        # Label
+        font = pygame.font.SysFont("consolas", 10)
+        label = font.render("MINIMAP", True, (150, 150, 150))
+        self.screen.blit(label, (map_x + 5, map_y + map_h - 15))
 
     def _draw_save_message(self):
         """Draw save/load message"""
