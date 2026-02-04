@@ -18,6 +18,7 @@ from entities.powerup import PowerUpManager
 from entities.trap import TrapManager
 from entities.door import DoorManager
 from entities.moving_wall import MovingWallManager, spawn_moving_walls
+from entities.boss import BossManager
 
 
 class Level:
@@ -50,6 +51,7 @@ class Level:
         self.trap_manager = TrapManager()
         self.door_manager = DoorManager()
         self.moving_wall_manager = MovingWallManager()
+        self.boss_manager = BossManager()
 
         # Level state
         self.time_elapsed = 0.0
@@ -155,6 +157,13 @@ class Level:
         # Create paths for moving walls
         self.moving_wall_manager.create_paths(self.walls, self.cols, self.rows)
 
+        # Spawn boss (only for Nightmare difficulty)
+        if self.config.has_boss:
+            self.boss_manager.create_boss(
+                self.goal_pos[0], self.goal_pos[1],
+                self.walls, self.cols, self.rows
+            )
+
     def update(self, dt):
         """
         Update level state
@@ -188,6 +197,10 @@ class Level:
 
         # Check win condition
         if self.player.x == self.goal_pos[0] and self.player.y == self.goal_pos[1]:
+            # If has boss, must defeat boss first
+            if self.config.has_boss and self.boss_manager.is_boss_alive():
+                # Can't win until boss is defeated
+                return False
             self.completed = True
             return True  # Signal level complete
 
@@ -212,6 +225,8 @@ class Level:
         self.powerup_manager.reset()
         self.trap_manager.reset()
         self.door_manager.reset()
+        self.boss_manager.reset()
+        self.moving_wall_manager.reset()
 
     def __repr__(self):
         return f"Level(difficulty={self.difficulty_level}, size={self.cols}x{self.rows})"

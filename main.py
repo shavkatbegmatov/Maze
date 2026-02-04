@@ -187,6 +187,9 @@ class MazeGame:
         elif key == pygame.K_F9:
             # Quick load
             self._quick_load()
+        elif key == pygame.K_SPACE:
+            # Attack boss if nearby
+            self._attack_boss()
 
     def _start_new_game(self):
         """Start a new game"""
@@ -271,6 +274,29 @@ class MazeGame:
         self.save_message_timer = duration
         self.save_message_text = text
 
+    def _attack_boss(self):
+        """Attack boss if player is adjacent"""
+        level = self.level_manager.get_current_level()
+        if not level or not level.boss_manager.active:
+            return
+
+        boss = level.boss_manager.get_boss()
+        if not boss or not boss.alive:
+            return
+
+        # Check if player is adjacent to boss
+        dist = abs(level.player.x - boss.x) + abs(level.player.y - boss.y)
+        if dist <= 1:
+            # Attack!
+            damage = 15  # Base damage
+            if level.boss_manager.damage_boss(damage):
+                # Boss defeated!
+                self._show_message("BOSS DEFEATED!")
+            else:
+                # Hit effect
+                self.particle_effects.explosion(boss.x, boss.y, (255, 200, 100))
+                self._show_message(f"Boss HP: {boss.health}/{boss.max_health}", 0.5)
+
     def update(self, dt):
         """Update game state"""
         state = self.state_manager.current_state
@@ -326,6 +352,52 @@ class MazeGame:
 
         # Update particles
         self.particle_system.update(dt)
+
+        # Update boss fight
+        if level.boss_manager.active:
+            boss_events = level.boss_manager.update(
+                dt, level.walls, level.cols, level.rows,
+                level.player, level.enemy_manager
+            )
+
+            # Handle boss events
+            if boss_events['fight_started']:
+                self._show_message("BOSS FIGHT!")
+                # Boss fight particles
+                boss = level.boss_manager.get_boss()
+                if boss:
+                    self.particle_effects.explosion(boss.x, boss.y, (180, 50, 50))
+
+            if boss_events['boss_attacked']:
+                self.particle_effects.player_damage(level.player.x, level.player.y)
+
+            if boss_events['boss_charged']:
+                boss = level.boss_manager.get_boss()
+                if boss:
+                    self.particle_effects.explosion(boss.x, boss.y, (255, 100, 50))
+
+            if boss_events['minions_summoned']:
+                boss = level.boss_manager.get_boss()
+                if boss:
+                    self.particle_effects.explosion(boss.x, boss.y, (150, 50, 150))
+                    self._show_message("Minions summoned!")
+
+            if boss_events['boss_defeated']:
+                boss = level.boss_manager.get_boss()
+                if boss:
+                    # Epic death explosion
+                    for _ in range(5):
+                        self.particle_effects.explosion(
+                            boss.x + random.randint(-1, 1),
+                            boss.y + random.randint(-1, 1),
+                            (255, random.randint(50, 150), 50)
+                        )
+                self._show_message("BOSS DEFEATED!")
+
+            # Check if player died from boss damage
+            if not level.player.is_alive():
+                self.particle_effects.explosion(level.player.x, level.player.y, (255, 50, 50))
+                self.game_flow.game_over('boss')
 
         # Ambient sparkles for power-ups
         if random.random() < 0.1:  # 10% chance per frame
@@ -525,6 +597,7 @@ class MazeGame:
         self._draw_traps(level)
         self._draw_enemies(level)
         self._draw_moving_walls(level)
+        self._draw_boss(level)
         self._draw_player(level)
 
         # Draw maze walls
@@ -602,6 +675,68 @@ class MazeGame:
         for enemy in level.enemy_manager.enemies:
             if self.fog_manager.is_visible(enemy.x, enemy.y):
                 self._draw_cell(enemy.x, enemy.y, enemy.get_color(), pad=7)
+
+    def _draw_boss(self, level):
+        """Draw boss enemy"""
+        boss = level.boss_manager.get_boss()
+        if not boss or not boss.alive:
+            return
+
+        if not self.fog_manager.is_visible(boss.x, boss.y):
+            return
+
+        # Draw boss (larger than normal enemies)
+        color = boss.get_color()
+        pad = int(3 * boss.size_multiplier)
+
+        rx = boss.x * CELL_SIZE + pad
+        ry = boss.y * CELL_SIZE + pad
+        rw = CELL_SIZE - pad * 2
+        rh = CELL_SIZE - pad * 2
+
+        # Main body
+        pygame.draw.rect(self.screen, color, (rx, ry, rw, rh), border_radius=8)
+
+        # Draw telegraphing indicator
+        if boss.is_telegraphing():
+            # Pulsing warning effect
+            import math
+            pulse = int(abs(math.sin(pygame.time.get_ticks() * 0.01)) * 100)
+            warning_color = (255, pulse + 100, 0)
+            pygame.draw.rect(self.screen, warning_color, (rx-2, ry-2, rw+4, rh+4), 3, border_radius=10)
+
+        # Phase indicator
+        if boss.phase >= 2:
+            # Draw horns for phase 2+
+            pygame.draw.polygon(self.screen, (100, 50, 50), [
+                (rx + 5, ry), (rx + 10, ry - 8), (rx + 15, ry)
+            ])
+            pygame.draw.polygon(self.screen, (100, 50, 50), [
+                (rx + rw - 15, ry), (rx + rw - 10, ry - 8), (rx + rw - 5, ry)
+            ])
+
+        if boss.phase >= 3:
+            # Draw aura for phase 3
+            aura_color = (255, 100, 100, 100)
+            aura_surf = pygame.Surface((rw + 20, rh + 20), pygame.SRCALPHA)
+            pygame.draw.rect(aura_surf, aura_color, (0, 0, rw + 20, rh + 20), border_radius=12)
+            self.screen.blit(aura_surf, (rx - 10, ry - 10))
+
+        # Draw boss health bar above boss
+        if level.boss_manager.fight_started:
+            bar_w = CELL_SIZE
+            bar_h = 6
+            bar_x = boss.x * CELL_SIZE
+            bar_y = boss.y * CELL_SIZE - 10
+
+            # Background
+            pygame.draw.rect(self.screen, (50, 50, 50), (bar_x, bar_y, bar_w, bar_h))
+            # Health
+            health_w = int(bar_w * boss.get_health_percent())
+            health_color = (255, 50, 50) if boss.phase == 3 else (200, 100, 50) if boss.phase == 2 else (150, 50, 50)
+            pygame.draw.rect(self.screen, health_color, (bar_x, bar_y, health_w, bar_h))
+            # Border
+            pygame.draw.rect(self.screen, (200, 200, 200), (bar_x, bar_y, bar_w, bar_h), 1)
 
     def _draw_player(self, level):
         # Player is always visible

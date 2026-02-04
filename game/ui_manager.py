@@ -66,6 +66,10 @@ class UIManager:
         # Stats (bottom right)
         self._draw_stats(screen, player, level, screen_w - 200, panel_y + 55)
 
+        # Boss health bar (top, above maze)
+        if level.boss_manager.active and level.boss_manager.fight_started:
+            self._draw_boss_health_bar(screen, level.boss_manager, screen_w)
+
     def _draw_health_bar(self, screen, player, x, y, width, height):
         """Draw health bar"""
         # Background
@@ -171,6 +175,57 @@ class UIManager:
         for i, stat in enumerate(stats):
             text = self.font_small.render(stat, True, COLOR_TEXT)
             screen.blit(text, (x, y + i * 18))
+
+    def _draw_boss_health_bar(self, screen, boss_manager, screen_w):
+        """Draw boss health bar at top of screen"""
+        boss = boss_manager.get_boss()
+        if not boss or not boss.alive:
+            return
+
+        # Boss health bar dimensions
+        bar_w = screen_w - 100
+        bar_h = 25
+        bar_x = 50
+        bar_y = 10
+
+        # Background
+        pygame.draw.rect(screen, (40, 20, 20), (bar_x - 2, bar_y - 2, bar_w + 4, bar_h + 4), border_radius=6)
+        pygame.draw.rect(screen, COLOR_HEALTH_BAR_BG, (bar_x, bar_y, bar_w, bar_h), border_radius=4)
+
+        # Health fill with phase colors
+        health_percent = boss.get_health_percent()
+        fill_w = int(bar_w * health_percent)
+
+        if boss.phase == 3:
+            health_color = (255, 50, 50)  # Bright red
+        elif boss.phase == 2:
+            health_color = (220, 100, 50)  # Orange
+        else:
+            health_color = (180, 50, 50)  # Dark red
+
+        if fill_w > 0:
+            pygame.draw.rect(screen, health_color, (bar_x, bar_y, fill_w, bar_h), border_radius=4)
+
+        # Border
+        pygame.draw.rect(screen, (200, 100, 100), (bar_x, bar_y, bar_w, bar_h), 3, border_radius=4)
+
+        # Boss name and phase
+        phase_text = f"BOSS - Phase {boss.phase}"
+        name_render = self.font_medium.render(phase_text, True, (255, 200, 200))
+        name_rect = name_render.get_rect(center=(screen_w // 2, bar_y + bar_h // 2))
+        screen.blit(name_render, name_rect)
+
+        # Health numbers
+        hp_text = f"{int(boss.health)}/{int(boss.max_health)}"
+        hp_render = self.font_small.render(hp_text, True, COLOR_TEXT)
+        hp_rect = hp_render.get_rect(right=bar_x + bar_w - 10, centery=bar_y + bar_h // 2)
+        screen.blit(hp_render, hp_rect)
+
+        # Attack hint
+        hint_text = "[SPACE] to attack when near boss"
+        hint_render = self.font_small.render(hint_text, True, (150, 150, 150))
+        hint_rect = hint_render.get_rect(center=(screen_w // 2, bar_y + bar_h + 15))
+        screen.blit(hint_render, hint_rect)
 
     def draw_menu(self, screen, title, menu_items, selected_index, subtitle=None):
         """
@@ -302,7 +357,13 @@ class UIManager:
         screen_w, screen_h = screen.get_size()
 
         # Title
-        title_text = "TIME'S UP!" if reason == 'time_up' else "GAME OVER"
+        if reason == 'time_up':
+            title_text = "TIME'S UP!"
+        elif reason == 'boss':
+            title_text = "BOSS DEFEATED YOU!"
+        else:
+            title_text = "GAME OVER"
+
         title = self.font_title.render(title_text, True, (255, 100, 100))
         title_rect = title.get_rect(center=(screen_w // 2, screen_h // 2 - 50))
         screen.blit(title, title_rect)
@@ -310,6 +371,8 @@ class UIManager:
         # Message
         if reason == 'time_up':
             msg = "You ran out of time!"
+        elif reason == 'boss':
+            msg = "The boss was too powerful!"
         else:
             msg = "You died!"
 
