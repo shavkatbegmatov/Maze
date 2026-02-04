@@ -240,21 +240,29 @@ class UIManager:
         """
         screen_w, screen_h = screen.get_size()
 
+        # Scale factors for different screen sizes
+        scale = min(screen_w / 800, screen_h / 600)
+        scale = max(0.6, min(1.5, scale))  # Clamp between 0.6 and 1.5
+
+        # Dynamic positioning
+        title_y = int(60 * scale)
+        subtitle_y = int(100 * scale)
+        start_y = int(150 * scale) if subtitle else int(120 * scale)
+        gap = int(45 * scale)
+        help_y = screen_h - int(40 * scale)
+
         # Title
         title_text = self.font_title.render(title, True, COLOR_TEXT_HIGHLIGHT)
-        title_rect = title_text.get_rect(center=(screen_w // 2, 80))
+        title_rect = title_text.get_rect(center=(screen_w // 2, title_y))
         screen.blit(title_text, title_rect)
 
         # Subtitle
         if subtitle:
             subtitle_text = self.font_medium.render(subtitle, True, COLOR_TEXT)
-            subtitle_rect = subtitle_text.get_rect(center=(screen_w // 2, 130))
+            subtitle_rect = subtitle_text.get_rect(center=(screen_w // 2, subtitle_y))
             screen.blit(subtitle_text, subtitle_rect)
 
         # Menu items
-        start_y = 200
-        gap = 40
-
         for i, item in enumerate(menu_items):
             is_selected = i == selected_index
             color = COLOR_MENU_SELECTION if is_selected else COLOR_TEXT
@@ -271,27 +279,33 @@ class UIManager:
 
         # Help text at bottom
         help_texts = [
-            "UP/DOWN: Navigate | ENTER: Select | ESC: Back/Quit"
+            "UP/DOWN: Navigate | ENTER: Select | ESC: Back/Quit",
+            "Alt+Enter: Fullscreen"
         ]
-        help_y = screen_h - 60
         for i, help_text in enumerate(help_texts):
             text = self.font_small.render(help_text, True, COLOR_TEXT_DIM)
-            text_rect = text.get_rect(center=(screen_w // 2, help_y + i * 20))
+            text_rect = text.get_rect(center=(screen_w // 2, help_y + i * 18))
             screen.blit(text, text_rect)
 
     def draw_difficulty_select(self, screen, selected_difficulty):
         """Draw difficulty selection screen"""
         screen_w, screen_h = screen.get_size()
 
+        # Scale factors for different screen sizes
+        scale = min(screen_w / 800, screen_h / 600)
+        scale = max(0.6, min(1.5, scale))
+
+        # Dynamic positioning
+        title_y = int(50 * scale)
+        start_y = int(110 * scale)
+        gap = int(55 * scale)
+
         # Title
         title = self.font_title.render("SELECT DIFFICULTY", True, COLOR_TEXT_HIGHLIGHT)
-        title_rect = title.get_rect(center=(screen_w // 2, 60))
+        title_rect = title.get_rect(center=(screen_w // 2, title_y))
         screen.blit(title, title_rect)
 
         # Difficulty options
-        start_y = 150
-        gap = 70
-
         for i, name in enumerate(DIFFICULTY_NAMES):
             is_selected = i == selected_difficulty
 
@@ -311,7 +325,7 @@ class UIManager:
             if is_selected:
                 desc = self._get_difficulty_description(i)
                 desc_text = self.font_small.render(desc, True, COLOR_TEXT_DIM)
-                desc_rect = desc_text.get_rect(center=(screen_w // 2, start_y + i * gap + 25))
+                desc_rect = desc_text.get_rect(center=(screen_w // 2, start_y + i * gap + 22))
                 screen.blit(desc_text, desc_rect)
 
     def _get_difficulty_description(self, difficulty):
