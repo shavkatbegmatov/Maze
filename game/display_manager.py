@@ -37,14 +37,10 @@ class DisplayManager:
 
     def initialize(self):
         """Initialize display manager and get native resolution"""
-        if not pygame.display.get_init():
-            pygame.display.init()
-
-        # Get native display resolution
+        # Get native display resolution (pygame must be initialized already)
         info = pygame.display.Info()
         self.native_width = info.current_w
         self.native_height = info.current_h
-
         self.initialized = True
 
     def set_resize_callback(self, callback):

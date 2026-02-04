@@ -46,7 +46,6 @@ class Camera:
 
     def get_display_info(self):
         """Get the current display resolution"""
-        pygame.display.init()
         info = pygame.display.Info()
         return info.current_w, info.current_h
 
