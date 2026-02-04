@@ -17,6 +17,7 @@ from entities.enemy import EnemyManager
 from entities.powerup import PowerUpManager
 from entities.trap import TrapManager
 from entities.door import DoorManager
+from entities.moving_wall import MovingWallManager, spawn_moving_walls
 
 
 class Level:
@@ -48,6 +49,7 @@ class Level:
         self.powerup_manager = PowerUpManager()
         self.trap_manager = TrapManager()
         self.door_manager = DoorManager()
+        self.moving_wall_manager = MovingWallManager()
 
         # Level state
         self.time_elapsed = 0.0
@@ -143,6 +145,16 @@ class Level:
         for x, y, color in doors:
             self.door_manager.add_door(x, y, color)
 
+        # Spawn moving walls
+        moving_wall_spawns = spawn_moving_walls(
+            self.config, self.walls, self.cols, self.rows,
+            self.start_pos, self.goal_pos
+        )
+        for x, y, direction, speed in moving_wall_spawns:
+            wall = self.moving_wall_manager.add_wall(x, y, direction, speed)
+        # Create paths for moving walls
+        self.moving_wall_manager.create_paths(self.walls, self.cols, self.rows)
+
     def update(self, dt):
         """
         Update level state
@@ -167,6 +179,12 @@ class Level:
         self.powerup_manager.update(dt)
         self.trap_manager.update(dt)
         self.door_manager.update(dt)
+        self.moving_wall_manager.update(dt)
+
+        # Check moving wall collision with player
+        if self.moving_wall_manager.is_blocked(self.player.x, self.player.y):
+            # Push player back or damage
+            self.player.take_damage(10)
 
         # Check win condition
         if self.player.x == self.goal_pos[0] and self.player.y == self.goal_pos[1]:

@@ -12,6 +12,7 @@ from game.game_state import GameStateManager, GameState, GameFlow
 from game.ui_manager import UIManager
 from game.collision import CollisionHandler
 from game.fog_of_war import FogManager
+from game.save_manager import SaveManager
 from entities.particle import ParticleSystem, ParticleEffects
 from maze.generator import GEN_ALGOS
 from utils.constants import (
@@ -45,6 +46,12 @@ class MazeGame:
         self.fog_manager = FogManager()
         self.particle_system = ParticleSystem()
         self.particle_effects = ParticleEffects(self.particle_system)
+
+        # Save/Load
+        self.save_manager = SaveManager()
+        self.show_save_message = False
+        self.save_message_timer = 0.0
+        self.save_message_text = ""
 
         # Screen (will be resized based on level)
         self.screen = None
@@ -146,6 +153,8 @@ class MazeGame:
 
         if selected == "Start Game":
             self._start_new_game()
+        elif selected == "Load Game":
+            self._quick_load()
         elif "Difficulty:" in selected:
             self.state_manager.transition_to(GameState.DIFFICULTY_SELECT)
         elif "Generator:" in selected:
@@ -172,6 +181,12 @@ class MazeGame:
             self.game_flow.pause_game()
         elif key == pygame.K_r:
             self.game_flow.retry_level()
+        elif key == pygame.K_F5:
+            # Quick save
+            self._quick_save()
+        elif key == pygame.K_F9:
+            # Quick load
+            self._quick_load()
 
     def _start_new_game(self):
         """Start a new game"""
@@ -209,9 +224,62 @@ class MazeGame:
             self.generator = None
             self.game_flow.generation_complete()
 
+    def _quick_save(self):
+        """Quick save game"""
+        level = self.level_manager.get_current_level()
+        if level and level.generation_complete:
+            success = self.save_manager.save_game(
+                level, level.player, self.state_manager, "quicksave"
+            )
+            if success:
+                self._show_message("Game Saved! (F9 to load)")
+            else:
+                self._show_message("Save Failed!")
+
+    def _quick_load(self):
+        """Quick load game"""
+        save_data = self.save_manager.load_game("quicksave")
+        if save_data:
+            level, success = self.save_manager.restore_game_state(
+                save_data, self.level_manager
+            )
+            if success and level:
+                self.level_manager.current_level = level
+                self._resize_screen_for_level(level)
+
+                # Recreate fog
+                self.fog_manager.create_fog(
+                    level.cols,
+                    level.rows,
+                    enabled=level.config.fog_enabled
+                )
+
+                # Clear particles
+                self.particle_system.clear()
+
+                # Set state to playing
+                self.state_manager.transition_to(GameState.PLAYING)
+                self._show_message("Game Loaded!")
+            else:
+                self._show_message("Load Failed!")
+        else:
+            self._show_message("No Save Found!")
+
+    def _show_message(self, text, duration=2.0):
+        """Show a temporary message"""
+        self.show_save_message = True
+        self.save_message_timer = duration
+        self.save_message_text = text
+
     def update(self, dt):
         """Update game state"""
         state = self.state_manager.current_state
+
+        # Update save message timer
+        if self.show_save_message:
+            self.save_message_timer -= dt
+            if self.save_message_timer <= 0:
+                self.show_save_message = False
 
         if state == GameState.GENERATING:
             self._update_generation(dt)
@@ -293,6 +361,12 @@ class MazeGame:
             dx, dy = -1, 0
 
         if (dx, dy) != (0, 0):
+            # Check if target position has a moving wall
+            target_x = level.player.x + dx
+            target_y = level.player.y + dy
+            if level.moving_wall_manager.is_blocked(target_x, target_y):
+                return  # Can't move into a moving wall
+
             if level.player.move(dx, dy, level.walls, level.cols, level.rows):
                 self.last_move_time = now
 
@@ -393,6 +467,7 @@ class MazeGame:
 
         self.menu_items = [
             "Start Game",
+            "Load Game",
             f"Difficulty: {diff_name}",
             f"Generator: {gen_name}",
             "Quit"
@@ -449,6 +524,7 @@ class MazeGame:
         self._draw_powerups(level)
         self._draw_traps(level)
         self._draw_enemies(level)
+        self._draw_moving_walls(level)
         self._draw_player(level)
 
         # Draw maze walls
@@ -465,6 +541,10 @@ class MazeGame:
             self.screen, level.player, level,
             maze_h, self.screen_w, PANEL_H
         )
+
+        # Draw save/load message
+        if self.show_save_message:
+            self._draw_save_message()
 
     def _draw_maze(self, walls, cols, rows):
         """Draw maze walls"""
@@ -526,6 +606,33 @@ class MazeGame:
     def _draw_player(self, level):
         # Player is always visible
         self._draw_cell(level.player.x, level.player.y, COLOR_PLAYER)
+
+    def _draw_moving_walls(self, level):
+        """Draw moving walls"""
+        for wall in level.moving_wall_manager.walls:
+            if self.fog_manager.is_visible(wall.x, wall.y):
+                # Draw with glow effect
+                color = wall.get_glow_color()
+                self._draw_cell(wall.x, wall.y, color, pad=3)
+                # Draw border
+                rx = wall.x * CELL_SIZE + 3
+                ry = wall.y * CELL_SIZE + 3
+                rw = CELL_SIZE - 6
+                rh = CELL_SIZE - 6
+                pygame.draw.rect(self.screen, (200, 200, 255), (rx, ry, rw, rh), 2, border_radius=4)
+
+    def _draw_save_message(self):
+        """Draw save/load message"""
+        font = pygame.font.SysFont("consolas", 24, bold=True)
+        text = font.render(self.save_message_text, True, (255, 220, 100))
+        text_rect = text.get_rect(center=(self.screen_w // 2, 50))
+
+        # Background
+        bg_rect = text_rect.inflate(30, 15)
+        pygame.draw.rect(self.screen, (30, 30, 40), bg_rect, border_radius=8)
+        pygame.draw.rect(self.screen, (255, 220, 100), bg_rect, 2, border_radius=8)
+
+        self.screen.blit(text, text_rect)
 
     def run(self):
         """Main game loop"""
