@@ -15,6 +15,7 @@ from game.collision import CollisionHandler
 from game.fog_of_war import FogManager
 from game.save_manager import SaveManager
 from game.camera import CameraManager
+from game.display_manager import DisplayManager
 from entities.particle import ParticleSystem, ParticleEffects
 from maze.generator import GEN_ALGOS
 from utils.constants import (
@@ -53,6 +54,11 @@ class MazeGame:
         self.camera_manager = CameraManager()
         self.cell_size = 35  # Will be updated by camera
 
+        # Display manager
+        self.display_manager = DisplayManager()
+        self.display_manager.initialize()
+        self.display_manager.set_resize_callback(self._on_screen_resize)
+
         # Save/Load
         self.save_manager = SaveManager()
         self.show_save_message = False
@@ -86,21 +92,36 @@ class MazeGame:
         self.last_move_time = 0
 
     def _create_screen(self, width, height):
-        """Create or resize screen"""
+        """Create or resize screen using DisplayManager"""
         self.screen_w = width
         self.screen_h = height
-        self.screen = pygame.display.set_mode((width, height))
-        pygame.display.set_caption(f"{GAME_TITLE} v{GAME_VERSION}")
+        self.screen = self.display_manager.create_screen(
+            width, height,
+            title=f"{GAME_TITLE} v{GAME_VERSION}"
+        )
+        # Update dimensions from display manager (may differ due to clamping)
+        self.screen_w, self.screen_h = self.display_manager.get_size()
 
     def _resize_screen_for_level(self, level):
         """Resize screen to fit level using camera system"""
-        # Let camera calculate optimal settings
-        screen_w, screen_h, cell_size, use_camera = self.camera_manager.setup_for_level(
-            level.cols, level.rows, PANEL_H
-        )
+        # In fullscreen mode, don't resize window - just recalculate cell size
+        if self.display_manager.is_fullscreen():
+            screen_w, screen_h = self.display_manager.get_size()
+            cell_size, use_camera = self.camera_manager.handle_screen_resize(
+                screen_w, screen_h, PANEL_H
+            )
+            # Update maze info in camera
+            self.camera_manager.camera.maze_cols = level.cols
+            self.camera_manager.camera.maze_rows = level.rows
+            self.cell_size = cell_size
+        else:
+            # Let camera calculate optimal settings for windowed mode
+            screen_w, screen_h, cell_size, use_camera = self.camera_manager.setup_for_level(
+                level.cols, level.rows, PANEL_H
+            )
 
-        self.cell_size = cell_size
-        self._create_screen(screen_w, screen_h)
+            self.cell_size = cell_size
+            self._create_screen(screen_w, screen_h)
 
         # Reset camera position
         self.camera_manager.reset()
@@ -118,7 +139,18 @@ class MazeGame:
                 self.running = False
                 return
 
+            # Window resize event
+            if event.type == pygame.VIDEORESIZE:
+                self._handle_window_resize(event.w, event.h)
+                continue
+
             if event.type == pygame.KEYDOWN:
+                # Alt+Enter = fullscreen toggle
+                if event.key == pygame.K_RETURN:
+                    mods = pygame.key.get_mods()
+                    if mods & pygame.KMOD_ALT:
+                        self._toggle_fullscreen()
+                        continue
                 self._handle_keydown(event.key)
 
     def _handle_keydown(self, key):
@@ -292,6 +324,47 @@ class MazeGame:
         self.show_save_message = True
         self.save_message_timer = duration
         self.save_message_text = text
+
+    def _toggle_fullscreen(self):
+        """Toggle between fullscreen and windowed mode"""
+        new_w, new_h = self.display_manager.toggle_fullscreen()
+        self.screen = self.display_manager.get_screen()
+        self.screen_w = new_w
+        self.screen_h = new_h
+
+        # Recalculate cell size and camera for new screen size
+        level = self.level_manager.get_current_level()
+        if level and level.generation_complete:
+            cell_size, use_camera = self.camera_manager.handle_screen_resize(
+                new_w, new_h, PANEL_H
+            )
+            self.cell_size = cell_size
+
+        mode_name = "Fullscreen" if self.display_manager.is_fullscreen() else "Windowed"
+        self._show_message(f"{mode_name} Mode", 1.0)
+
+    def _handle_window_resize(self, event_w, event_h):
+        """Handle window resize event"""
+        new_w, new_h = self.display_manager.handle_resize(event_w, event_h)
+        self.screen = self.display_manager.get_screen()
+        self.screen_w = new_w
+        self.screen_h = new_h
+
+    def _on_screen_resize(self, new_width, new_height):
+        """Callback for screen resize - update camera and cell size"""
+        level = self.level_manager.get_current_level()
+        if level and level.generation_complete:
+            cell_size, use_camera = self.camera_manager.handle_screen_resize(
+                new_width, new_height, PANEL_H
+            )
+            self.cell_size = cell_size
+
+            # Recreate fog surface for new size
+            self.fog_manager.create_fog(
+                level.cols,
+                level.rows,
+                enabled=level.config.fog_enabled
+            )
 
     def _attack_boss(self):
         """Attack boss if player is adjacent"""

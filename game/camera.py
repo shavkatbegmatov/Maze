@@ -246,6 +246,64 @@ class Camera:
         self.camera_x = 0
         self.camera_y = 0
 
+    def recalculate_for_screen_size(self, new_width, new_height, panel_height):
+        """
+        Recalculate cell_size and viewport when screen size changes
+
+        Args:
+            new_width: New screen width
+            new_height: New screen height
+            panel_height: Height of HUD panel
+
+        Returns:
+            tuple: (cell_size, use_camera)
+        """
+        self.screen_width = new_width
+        self.screen_height = new_height
+        self.panel_height = panel_height
+
+        if self.maze_cols == 0 or self.maze_rows == 0:
+            return (self.cell_size, self.use_camera)
+
+        # Calculate available space for maze
+        available_width = new_width
+        available_height = new_height - panel_height
+
+        # Calculate optimal cell size to fit maze
+        max_cell_for_width = available_width / self.maze_cols
+        max_cell_for_height = available_height / self.maze_rows
+
+        optimal_cell_size = min(max_cell_for_width, max_cell_for_height)
+
+        # Clamp to limits
+        optimal_cell_size = max(self.min_cell_size, min(self.max_cell_size, optimal_cell_size))
+        self.cell_size = int(optimal_cell_size)
+
+        # Determine if camera mode is needed
+        maze_width = self.maze_cols * self.cell_size
+        maze_height = self.maze_rows * self.cell_size
+
+        preferred_min_cell = 20
+
+        needs_camera = (
+            maze_width > available_width or
+            maze_height > available_height or
+            self.cell_size < preferred_min_cell
+        )
+
+        if needs_camera:
+            self.use_camera = True
+            # In camera mode, use a comfortable cell size
+            self.cell_size = max(20, min(30, self.cell_size))
+            self.viewport_cols = new_width // self.cell_size
+            self.viewport_rows = (new_height - panel_height) // self.cell_size
+        else:
+            self.use_camera = False
+            self.viewport_cols = self.maze_cols
+            self.viewport_rows = self.maze_rows
+
+        return (self.cell_size, self.use_camera)
+
 
 class CameraManager:
     """
@@ -313,3 +371,19 @@ class CameraManager:
     def reset(self):
         """Reset camera position"""
         self.camera.reset()
+
+    def handle_screen_resize(self, new_width, new_height, panel_height):
+        """
+        Handle screen resize event
+
+        Args:
+            new_width: New screen width
+            new_height: New screen height
+            panel_height: Height of HUD panel
+
+        Returns:
+            tuple: (cell_size, use_camera)
+        """
+        self.camera.screen_width = new_width
+        self.camera.screen_height = new_height
+        return self.camera.recalculate_for_screen_size(new_width, new_height, panel_height)

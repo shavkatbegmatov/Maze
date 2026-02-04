@@ -2,7 +2,18 @@
 Global constants for Maze Game V3
 """
 
+from enum import Enum, auto
+
+
+class DisplayMode(Enum):
+    """Display mode enum for fullscreen/windowed switching"""
+    WINDOWED = auto()
+    FULLSCREEN = auto()
+
+
 # Screen settings
+MIN_WINDOW_WIDTH = 640
+MIN_WINDOW_HEIGHT = 480
 CELL_SIZE = 35
 FPS = 60
 WALL_THICK = 3
