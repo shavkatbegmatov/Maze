@@ -42,6 +42,9 @@ from utils.colors import (
 )
 from config import GAME_TITLE, GAME_VERSION
 
+# 3D Renderer imports
+from renderer3d import Raycaster, Player3D, Renderer3D, TextureManager, Minimap3D
+
 WINDOWSIZECHANGED_EVENT = getattr(pygame, "WINDOWSIZECHANGED", None)
 WINDOWRESIZED_EVENT = getattr(pygame, "WINDOWRESIZED", None)
 WINDOWEVENT_EVENT = getattr(pygame, "WINDOWEVENT", None)
@@ -117,6 +120,16 @@ class MazeGame:
         self.move_cooldown_ms = 90
         self.last_move_time = 0
 
+        # Game mode (0 = 2D, 1 = 3D)
+        self.game_mode = 0
+        self.selected_mode = 0  # For mode selection screen
+
+        # 3D rendering components (initialized lazily)
+        self.renderer_3d = None
+        self.player_3d = None
+        self.minimap_3d = None
+        self.mouse_grabbed = False
+
     def _create_screen(self, width, height):
         """Create or resize screen using DisplayManager"""
         self.screen_w = width
@@ -175,6 +188,11 @@ class MazeGame:
                 self._handle_window_resize(*resize_size)
                 continue
 
+            # Handle mouse motion for 3D mode
+            if event.type == pygame.MOUSEMOTION:
+                if self.state_manager.current_state == GameState.PLAYING_3D and self.mouse_grabbed:
+                    self._handle_3d_mouse_motion(event)
+
             if event.type == pygame.KEYDOWN:
                 # Alt+Enter = fullscreen toggle
                 if event.key == pygame.K_RETURN:
@@ -218,6 +236,9 @@ class MazeGame:
         if state == GameState.MENU:
             self._handle_menu_input(key)
 
+        elif state == GameState.MODE_SELECT:
+            self._handle_mode_select_input(key)
+
         elif state == GameState.DIFFICULTY_SELECT:
             self._handle_difficulty_select_input(key)
 
@@ -229,20 +250,30 @@ class MazeGame:
         elif state == GameState.PLAYING:
             self._handle_playing_input(key)
 
+        elif state == GameState.PLAYING_3D:
+            self._handle_playing_3d_input(key)
+
         elif state == GameState.PAUSED:
             if key == pygame.K_p:
-                self.game_flow.resume_game()
+                self._resume_from_pause()
             elif key == pygame.K_ESCAPE:
+                self._release_mouse()
                 self.game_flow.return_to_menu()
 
         elif state == GameState.LEVEL_COMPLETE:
             if key == pygame.K_RETURN:
+                self._release_mouse()
                 self.game_flow.return_to_menu()
 
         elif state == GameState.GAME_OVER:
             if key == pygame.K_r:
                 self.game_flow.retry_level()
+                # Re-grab mouse if in 3D mode
+                if self.game_mode == 1:
+                    self.state_manager.transition_to(GameState.PLAYING_3D)
+                    self._grab_mouse()
             elif key == pygame.K_ESCAPE:
+                self._release_mouse()
                 self.game_flow.return_to_menu()
 
     def _handle_menu_input(self, key):
@@ -264,12 +295,26 @@ class MazeGame:
             self._start_new_game()
         elif selected == "Load Game":
             self._quick_load()
+        elif "Game Mode:" in selected:
+            self.state_manager.transition_to(GameState.MODE_SELECT)
         elif "Difficulty:" in selected:
             self.state_manager.transition_to(GameState.DIFFICULTY_SELECT)
         elif "Generator:" in selected:
             self.selected_generator = (self.selected_generator + 1) % len(GEN_ALGOS)
         elif selected == "Quit":
             self.running = False
+
+    def _handle_mode_select_input(self, key):
+        """Handle game mode selection input"""
+        if key in (pygame.K_UP, pygame.K_w):
+            self.selected_mode = (self.selected_mode - 1) % 2
+        elif key in (pygame.K_DOWN, pygame.K_s):
+            self.selected_mode = (self.selected_mode + 1) % 2
+        elif key == pygame.K_RETURN:
+            self.game_mode = self.selected_mode
+            self.state_manager.transition_to(GameState.MENU)
+        elif key == pygame.K_ESCAPE:
+            self.state_manager.transition_to(GameState.MENU)
 
     def _handle_difficulty_select_input(self, key):
         """Handle difficulty selection input"""
@@ -300,6 +345,63 @@ class MazeGame:
             # Attack boss if nearby
             self._attack_boss()
 
+    def _handle_playing_3d_input(self, key):
+        """Handle 3D playing state input"""
+        if key == pygame.K_p:
+            self._release_mouse()
+            self.game_flow.pause_game()
+        elif key == pygame.K_ESCAPE:
+            self._release_mouse()
+            self.game_flow.pause_game()
+        elif key == pygame.K_r:
+            self.game_flow.retry_level()
+            self._grab_mouse()
+        elif key == pygame.K_F5:
+            self._quick_save()
+        elif key == pygame.K_F9:
+            self._quick_load()
+        elif key == pygame.K_SPACE:
+            self._attack_boss()
+
+    def _handle_3d_mouse_motion(self, event):
+        """Handle mouse motion for 3D look"""
+        if self.player_3d and self.mouse_grabbed:
+            # Get relative mouse movement
+            rel_x = event.rel[0]
+            self.player_3d.handle_mouse_look(rel_x)
+
+    def _grab_mouse(self):
+        """Grab mouse for 3D mode"""
+        pygame.mouse.set_visible(False)
+        pygame.event.set_grab(True)
+        self.mouse_grabbed = True
+
+    def _release_mouse(self):
+        """Release mouse grab"""
+        pygame.mouse.set_visible(True)
+        pygame.event.set_grab(False)
+        self.mouse_grabbed = False
+
+    def _resume_from_pause(self):
+        """Resume game from pause state"""
+        self.game_flow.resume_game()
+        # Re-grab mouse if in 3D mode
+        if self.game_mode == 1 and self.state_manager.current_state == GameState.PLAYING_3D:
+            self._grab_mouse()
+
+    def _init_3d_renderer(self):
+        """Initialize 3D rendering components"""
+        if self.renderer_3d is None:
+            self.renderer_3d = Renderer3D(self.screen_w, self.screen_h - PANEL_H, fov=60)
+            self.minimap_3d = Minimap3D(width=150, height=100)
+
+    def _init_player_3d(self, level):
+        """Initialize 3D player from level player position"""
+        if self.player_3d is None:
+            self.player_3d = Player3D(level.player.x, level.player.y)
+        else:
+            self.player_3d.set_position(level.player.x, level.player.y)
+
     def _start_new_game(self):
         """Start a new game"""
         level, gen = self.game_flow.start_new_game(
@@ -308,7 +410,13 @@ class MazeGame:
             animated=True
         )
 
-        self._resize_screen_for_level(level)
+        # For 3D mode, use fixed screen size
+        if self.game_mode == 1:
+            self._create_screen(800, 600)
+            self._init_3d_renderer()
+            self._init_player_3d(level)
+        else:
+            self._resize_screen_for_level(level)
 
         # Create fog of war for level
         self.fog_manager.create_fog(
@@ -334,7 +442,14 @@ class MazeGame:
             level = self.level_manager.get_current_level()
             level.finalize_generation(last_state['walls'])
             self.generator = None
-            self.game_flow.generation_complete()
+
+            # Transition to appropriate playing state based on game mode
+            if self.game_mode == 1:
+                self._init_player_3d(level)
+                self.state_manager.transition_to(GameState.PLAYING_3D)
+                self._grab_mouse()
+            else:
+                self.game_flow.generation_complete()
 
     def _quick_save(self):
         """Quick save game"""
@@ -621,6 +736,9 @@ class MazeGame:
         elif state == GameState.PLAYING:
             self._update_playing(dt)
 
+        elif state == GameState.PLAYING_3D:
+            self._update_playing_3d(dt)
+
     def _update_generation(self, dt):
         """Update maze generation"""
         if not self.generator:
@@ -639,11 +757,26 @@ class MazeGame:
                         level = self.level_manager.get_current_level()
                         level.finalize_generation(state['walls'])
                         self.generator = None
-                        self.game_flow.generation_complete()
+
+                        # Transition to appropriate playing state
+                        if self.game_mode == 1:
+                            self._init_player_3d(level)
+                            self.state_manager.transition_to(GameState.PLAYING_3D)
+                            self._grab_mouse()
+                        else:
+                            self.game_flow.generation_complete()
                         break
                 except StopIteration:
                     self.generator = None
-                    self.game_flow.generation_complete()
+
+                    # Transition to appropriate playing state
+                    if self.game_mode == 1:
+                        level = self.level_manager.get_current_level()
+                        self._init_player_3d(level)
+                        self.state_manager.transition_to(GameState.PLAYING_3D)
+                        self._grab_mouse()
+                    else:
+                        self.game_flow.generation_complete()
                     break
 
     def _update_playing(self, dt):
@@ -720,6 +853,96 @@ class MazeGame:
 
         # Handle movement
         self._handle_player_movement()
+
+    def _update_playing_3d(self, dt):
+        """Update 3D playing state"""
+        level = self.level_manager.get_current_level()
+        if not level or not self.player_3d:
+            return
+
+        # Handle keyboard input for 3D movement
+        keys = pygame.key.get_pressed()
+
+        # Forward/backward
+        forward = 0
+        if keys[pygame.K_w] or keys[pygame.K_UP]:
+            forward = 1
+        elif keys[pygame.K_s] or keys[pygame.K_DOWN]:
+            forward = -1
+
+        # Strafe left/right
+        strafe = 0
+        if keys[pygame.K_d]:
+            strafe = 1
+        elif keys[pygame.K_a]:
+            strafe = -1
+
+        # Keyboard turning (arrow keys when not using mouse)
+        turn = 0
+        if keys[pygame.K_LEFT]:
+            turn = -1
+        elif keys[pygame.K_RIGHT]:
+            turn = 1
+
+        # Apply movement
+        moved = self.player_3d.move(forward, strafe, level.walls, level.cols, level.rows, dt)
+
+        # Apply keyboard turning
+        if turn != 0:
+            self.player_3d.handle_keyboard_turn(turn, dt)
+
+        # Sync 3D player position back to 2D player (for collision detection)
+        old_x, old_y = level.player.x, level.player.y
+        self.player_3d.sync_to_2d_player(level.player)
+
+        # Check if player moved to a new cell
+        if (level.player.x, level.player.y) != (old_x, old_y):
+            # Check collisions with the 2D collision system
+            collision_result = self.collision_handler.check_player_position(
+                level.player,
+                level.enemy_manager,
+                level.powerup_manager,
+                level.trap_manager,
+                level.door_manager,
+                level.walls,
+                level.cols,
+                level.rows
+            )
+
+            # Handle collision results
+            if collision_result['player_died']:
+                self._release_mouse()
+                self.game_flow.game_over('died')
+                return
+
+        # Update level (enemies, traps, etc.)
+        result = self.game_flow.update(dt)
+
+        # Check for level completion
+        if level.player.x == level.goal_pos[0] and level.player.y == level.goal_pos[1]:
+            self._release_mouse()
+            self.game_flow.level_completed(level, level.player)
+            return
+
+        # Update fog of war
+        self.fog_manager.update(dt, level.player, level)
+
+        # Update boss fight
+        if level.boss_manager.active:
+            boss_events = level.boss_manager.update(
+                dt, level.walls, level.cols, level.rows,
+                level.player, level.enemy_manager
+            )
+
+            if boss_events['fight_started']:
+                self._show_message("BOSS FIGHT!")
+
+            if boss_events['boss_defeated']:
+                self._show_message("BOSS DEFEATED!")
+
+            if not level.player.is_alive():
+                self._release_mouse()
+                self.game_flow.game_over('boss')
 
     def _handle_player_movement(self):
         """Handle player movement input"""
@@ -816,6 +1039,9 @@ class MazeGame:
         if state == GameState.MENU:
             self._render_menu()
 
+        elif state == GameState.MODE_SELECT:
+            self._render_mode_select()
+
         elif state == GameState.DIFFICULTY_SELECT:
             self._render_difficulty_select()
 
@@ -825,8 +1051,15 @@ class MazeGame:
         elif state == GameState.PLAYING:
             self._render_playing()
 
+        elif state == GameState.PLAYING_3D:
+            self._render_playing_3d()
+
         elif state == GameState.PAUSED:
-            self._render_playing()  # Render game underneath
+            # Render game underneath based on mode
+            if self.game_mode == 1:
+                self._render_playing_3d()
+            else:
+                self._render_playing()
             self.ui_manager.draw_paused(self.screen)
 
         elif state == GameState.LEVEL_COMPLETE:
@@ -847,10 +1080,12 @@ class MazeGame:
         # Update menu items with current settings
         gen_name = GEN_ALGOS[self.selected_generator][0]
         diff_name = DIFFICULTY_NAMES[self.selected_difficulty]
+        mode_name = "3D" if self.game_mode == 1 else "2D"
 
         self.menu_items = [
             "Start Game",
             "Load Game",
+            f"Game Mode: {mode_name}",
             f"Difficulty: {diff_name}",
             f"Generator: {gen_name}",
             "Quit"
@@ -863,6 +1098,10 @@ class MazeGame:
             self.menu_index,
             subtitle=f"Version {GAME_VERSION}"
         )
+
+    def _render_mode_select(self):
+        """Render game mode selection screen"""
+        self.ui_manager.draw_mode_select(self.screen, self.selected_mode)
 
     def _render_difficulty_select(self):
         """Render difficulty selection"""
@@ -890,6 +1129,43 @@ class MazeGame:
         hint = small_font.render("Press SPACE to skip", True, (200, 200, 200))
         hint_rect = hint.get_rect(center=(self.screen_w // 2, self.screen_h // 2 + 50))
         self.screen.blit(hint, hint_rect)
+
+    def _render_playing_3d(self):
+        """Render 3D first-person view"""
+        level = self.level_manager.get_current_level()
+        if not level or not self.player_3d or not self.renderer_3d:
+            return
+
+        # Update renderer size if needed
+        render_h = self.screen_h - PANEL_H
+        if self.renderer_3d.screen_width != self.screen_w or self.renderer_3d.render_height != render_h:
+            self.renderer_3d.set_render_area(self.screen_w, render_h)
+
+        # Render 3D view
+        self.renderer_3d.render(
+            self.screen,
+            self.player_3d,
+            level,
+            self.fog_manager
+        )
+
+        # Draw minimap
+        self.minimap_3d.render(
+            self.screen,
+            self.player_3d,
+            level,
+            self.fog_manager,
+            position='top-right'
+        )
+
+        # Draw HUD
+        self.ui_manager.draw_hud_3d(
+            self.screen, level.player, level, self.screen_h
+        )
+
+        # Draw save/load message
+        if self.show_save_message:
+            self._draw_save_message()
 
     def _render_playing(self):
         """Render playing state"""

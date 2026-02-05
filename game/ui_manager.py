@@ -424,3 +424,106 @@ class UIManager:
         text = self.font_large.render("Press P to resume", True, COLOR_TEXT)
         text_rect = text.get_rect(center=(screen_w // 2, screen_h // 2 + 20))
         screen.blit(text, text_rect)
+
+    def draw_mode_select(self, screen, selected_mode):
+        """
+        Draw game mode selection screen (2D / 3D)
+
+        Args:
+            screen: pygame.Surface
+            selected_mode: 0 = 2D, 1 = 3D
+        """
+        screen_w, screen_h = screen.get_size()
+
+        # Scale factors
+        scale = min(screen_w / 800, screen_h / 600)
+        scale = max(0.6, min(1.5, scale))
+
+        # Dynamic positioning
+        title_y = int(60 * scale)
+        start_y = int(150 * scale)
+        gap = int(80 * scale)
+
+        # Title
+        title = self.font_title.render("SELECT GAME MODE", True, COLOR_TEXT_HIGHLIGHT)
+        title_rect = title.get_rect(center=(screen_w // 2, title_y))
+        screen.blit(title, title_rect)
+
+        # Mode options
+        modes = [
+            ("2D Mode", "Classic top-down view"),
+            ("3D Mode", "First-person (Wolfenstein style)")
+        ]
+
+        for i, (name, desc) in enumerate(modes):
+            is_selected = i == selected_mode
+            color = COLOR_MENU_SELECTION if is_selected else COLOR_TEXT
+
+            # Mode name
+            text = self.font_large.render(name, True, color)
+            text_rect = text.get_rect(center=(screen_w // 2, start_y + i * gap))
+
+            # Selection border
+            if is_selected:
+                border_rect = text_rect.inflate(60, 30)
+                pygame.draw.rect(screen, COLOR_MENU_BORDER, border_rect, 3, border_radius=10)
+
+            screen.blit(text, text_rect)
+
+            # Description
+            desc_text = self.font_small.render(desc, True, COLOR_TEXT_DIM)
+            desc_rect = desc_text.get_rect(center=(screen_w // 2, start_y + i * gap + 28))
+            screen.blit(desc_text, desc_rect)
+
+        # Help text
+        help_y = screen_h - int(60 * scale)
+        help_texts = [
+            "UP/DOWN: Select | ENTER: Confirm | ESC: Back"
+        ]
+        for i, help_text in enumerate(help_texts):
+            text = self.font_small.render(help_text, True, COLOR_TEXT_DIM)
+            text_rect = text.get_rect(center=(screen_w // 2, help_y + i * 18))
+            screen.blit(text, text_rect)
+
+    def draw_hud_3d(self, screen, player, level, screen_h):
+        """
+        Draw minimal HUD for 3D mode (overlay style)
+
+        Args:
+            screen: pygame.Surface
+            player: Player instance (2D player for stats)
+            level: Level instance
+            screen_h: Screen height
+        """
+        screen_w = screen.get_width()
+
+        # Semi-transparent bottom bar
+        bar_h = 60
+        bar_surface = pygame.Surface((screen_w, bar_h), pygame.SRCALPHA)
+        bar_surface.fill((0, 0, 0, 150))
+        screen.blit(bar_surface, (0, screen_h - bar_h))
+
+        # Health bar (left side)
+        self._draw_health_bar(screen, player, 10, screen_h - bar_h + 10, 180, 18)
+
+        # Energy bar (below health)
+        self._draw_energy_bar(screen, player, 10, screen_h - bar_h + 35, 180, 14)
+
+        # Timer (center)
+        self._draw_timer(screen, level, screen_w // 2, screen_h - bar_h + 5)
+
+        # Key inventory (right side)
+        self._draw_key_inventory(screen, player, screen_w - 130, screen_h - bar_h + 10)
+
+        # Crosshair (center of screen)
+        cx, cy = screen_w // 2, (screen_h - bar_h) // 2
+        crosshair_size = 8
+        crosshair_color = (200, 200, 200, 180)
+
+        # Draw crosshair
+        pygame.draw.line(screen, crosshair_color, (cx - crosshair_size, cy), (cx + crosshair_size, cy), 2)
+        pygame.draw.line(screen, crosshair_color, (cx, cy - crosshair_size), (cx, cy + crosshair_size), 2)
+
+        # Boss health bar (top, if active)
+        if level.boss_manager.active and level.boss_manager.fight_started:
+            self._draw_boss_health_bar(screen, level.boss_manager, screen_w)

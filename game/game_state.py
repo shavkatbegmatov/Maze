@@ -8,9 +8,11 @@ from enum import Enum, auto
 class GameState(Enum):
     """Game states"""
     MENU = auto()
+    MODE_SELECT = auto()  # 2D/3D mode selection
     DIFFICULTY_SELECT = auto()
     GENERATING = auto()
     PLAYING = auto()
+    PLAYING_3D = auto()  # 3D first-person mode
     PAUSED = auto()
     LEVEL_COMPLETE = auto()
     GAME_OVER = auto()
@@ -45,12 +47,16 @@ class GameStateManager:
         """Called when entering a new state"""
         if state == GameState.MENU:
             self._enter_menu()
+        elif state == GameState.MODE_SELECT:
+            self._enter_mode_select()
         elif state == GameState.DIFFICULTY_SELECT:
             self._enter_difficulty_select()
         elif state == GameState.GENERATING:
             self._enter_generating()
         elif state == GameState.PLAYING:
             self._enter_playing()
+        elif state == GameState.PLAYING_3D:
+            self._enter_playing_3d()
         elif state == GameState.PAUSED:
             self._enter_paused()
         elif state == GameState.LEVEL_COMPLETE:
@@ -64,6 +70,10 @@ class GameStateManager:
         """Enter menu state"""
         pass
 
+    def _enter_mode_select(self):
+        """Enter game mode selection state (2D/3D)"""
+        pass
+
     def _enter_difficulty_select(self):
         """Enter difficulty selection state"""
         pass
@@ -74,6 +84,10 @@ class GameStateManager:
 
     def _enter_playing(self):
         """Enter playing state"""
+        pass
+
+    def _enter_playing_3d(self):
+        """Enter 3D first-person playing state"""
         pass
 
     def _enter_paused(self):
@@ -138,7 +152,7 @@ class GameStateManager:
 
     def can_pause(self):
         """Check if game can be paused"""
-        return self.current_state == GameState.PLAYING
+        return self.current_state in (GameState.PLAYING, GameState.PLAYING_3D)
 
     def can_resume(self):
         """Check if game can be resumed"""
