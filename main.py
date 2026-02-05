@@ -414,7 +414,7 @@ class MazeGame:
         if self.game_mode == 1:
             self._create_screen(800, 600)
             self._init_3d_renderer()
-            self._init_player_3d(level)
+            # Player 3D will be initialized after generation completes
         else:
             self._resize_screen_for_level(level)
 
@@ -445,9 +445,13 @@ class MazeGame:
 
             # Transition to appropriate playing state based on game mode
             if self.game_mode == 1:
-                self._init_player_3d(level)
-                self.state_manager.transition_to(GameState.PLAYING_3D)
-                self._grab_mouse()
+                # Now player exists after finalize_generation
+                if level.player:
+                    self._init_player_3d(level)
+                    self.state_manager.transition_to(GameState.PLAYING_3D)
+                    self._grab_mouse()
+                else:
+                    self.game_flow.generation_complete()
             else:
                 self.game_flow.generation_complete()
 
@@ -759,7 +763,7 @@ class MazeGame:
                         self.generator = None
 
                         # Transition to appropriate playing state
-                        if self.game_mode == 1:
+                        if self.game_mode == 1 and level.player:
                             self._init_player_3d(level)
                             self.state_manager.transition_to(GameState.PLAYING_3D)
                             self._grab_mouse()
@@ -770,8 +774,8 @@ class MazeGame:
                     self.generator = None
 
                     # Transition to appropriate playing state
-                    if self.game_mode == 1:
-                        level = self.level_manager.get_current_level()
+                    level = self.level_manager.get_current_level()
+                    if self.game_mode == 1 and level and level.player:
                         self._init_player_3d(level)
                         self.state_manager.transition_to(GameState.PLAYING_3D)
                         self._grab_mouse()
