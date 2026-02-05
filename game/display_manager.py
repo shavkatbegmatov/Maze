@@ -35,6 +35,10 @@ class DisplayManager:
         # Initialized flag
         self.initialized = False
 
+        # Last known size for detecting resize during drag
+        self.last_width = 800
+        self.last_height = 600
+
     def initialize(self):
         """Initialize display manager and get native resolution"""
         # Get native display resolution (pygame must be initialized already)
@@ -42,6 +46,8 @@ class DisplayManager:
         self.native_width = info.current_w
         self.native_height = info.current_h
         self.initialized = True
+        self.last_width = self.screen_width
+        self.last_height = self.screen_height
 
     def set_resize_callback(self, callback):
         """
@@ -91,6 +97,8 @@ class DisplayManager:
             # Store windowed size
             self.windowed_width = width
             self.windowed_height = height
+            self.last_width = width
+            self.last_height = height
 
         if title:
             pygame.display.set_caption(title)
@@ -146,22 +154,54 @@ class DisplayManager:
         new_width = max(MIN_WINDOW_WIDTH, event_w)
         new_height = max(MIN_WINDOW_HEIGHT, event_h)
 
-        # Recreate screen with new size
-        self.screen = pygame.display.set_mode(
-            (new_width, new_height),
-            pygame.RESIZABLE
-        )
+        if new_width == self.screen_width and new_height == self.screen_height:
+            return (self.screen_width, self.screen_height)
 
-        self.screen_width = new_width
-        self.screen_height = new_height
-        self.windowed_width = new_width
-        self.windowed_height = new_height
+        # In pygame 2 the display surface is usually resized automatically.
+        surface = pygame.display.get_surface()
+        if surface is not None and surface.get_size() == (new_width, new_height):
+            self.screen = surface
+        else:
+            self.screen = pygame.display.set_mode((new_width, new_height), pygame.RESIZABLE)
+            new_width, new_height = self.screen.get_size()
 
-        # Call resize callback
-        if self.resize_callback:
-            self.resize_callback(new_width, new_height)
-
+        self.sync_size(new_width, new_height, surface=self.screen, trigger_callback=True)
         return (new_width, new_height)
+
+    def sync_size(self, width, height, surface=None, trigger_callback=True):
+        """
+        Synchronize tracked display size with the actual window size.
+
+        Args:
+            width: New width
+            height: New height
+            surface: Optional pygame display surface
+            trigger_callback: Whether to fire resize callback when changed
+
+        Returns:
+            tuple: (changed, width, height)
+        """
+        width = max(MIN_WINDOW_WIDTH, width)
+        height = max(MIN_WINDOW_HEIGHT, height)
+
+        changed = (width != self.screen_width or height != self.screen_height)
+
+        if surface is not None:
+            self.screen = surface
+        elif self.screen is None:
+            self.screen = pygame.display.get_surface()
+
+        self.screen_width = width
+        self.screen_height = height
+        self.windowed_width = width
+        self.windowed_height = height
+        self.last_width = width
+        self.last_height = height
+
+        if changed and trigger_callback and self.resize_callback:
+            self.resize_callback(width, height)
+
+        return (changed, width, height)
 
     def get_screen(self):
         """Get current screen surface"""
@@ -178,3 +218,33 @@ class DisplayManager:
     def get_mode(self):
         """Get current display mode"""
         return self.mode
+
+    def check_live_resize(self):
+        """
+        Check if window was resized during drag (real-time resize detection).
+        Call this every frame to detect resize while mouse button is held.
+
+        Returns:
+            tuple: (changed, new_width, new_height) - changed is True if size changed
+        """
+        # Skip in fullscreen mode
+        if self.mode == DisplayMode.FULLSCREEN:
+            return (False, self.screen_width, self.screen_height)
+
+        # Get current actual window size
+        surface = pygame.display.get_surface() or self.screen
+        if surface:
+            self.screen = surface
+            current_w, current_h = surface.get_size()
+
+            # Check if size changed
+            if current_w != self.last_width or current_h != self.last_height:
+                changed, new_width, new_height = self.sync_size(
+                    current_w,
+                    current_h,
+                    surface=surface,
+                    trigger_callback=True
+                )
+                return (changed, new_width, new_height)
+
+        return (False, self.screen_width, self.screen_height)

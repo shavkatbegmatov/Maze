@@ -3,10 +3,22 @@ Maze Game V3 - Nightmare Edition
 Full game with all features
 """
 
-import pygame
+import os
 import sys
+
+# Enable smooth live resize on Windows (must be set before pygame import)
+if sys.platform == 'win32':
+    os.environ.setdefault('SDL_WINDOWS_ENABLE_MESSAGELOOP', '1')
+
+os.environ.setdefault('SDL_VIDEO_ALLOW_SCREENSAVER', '1')
+
+import pygame
 import random
 import math
+
+if sys.platform == 'win32':
+    import ctypes
+    import ctypes.wintypes
 
 from game.level_manager import LevelManager
 from game.game_state import GameStateManager, GameState, GameFlow
@@ -29,6 +41,12 @@ from utils.colors import (
     COLOR_VISITED_CELL, COLOR_MENU_OVERLAY
 )
 from config import GAME_TITLE, GAME_VERSION
+
+WINDOWSIZECHANGED_EVENT = getattr(pygame, "WINDOWSIZECHANGED", None)
+WINDOWRESIZED_EVENT = getattr(pygame, "WINDOWRESIZED", None)
+WINDOWEVENT_EVENT = getattr(pygame, "WINDOWEVENT", None)
+WINDOWEVENT_SIZE_CHANGED = getattr(pygame, "WINDOWEVENT_SIZE_CHANGED", None)
+WINDOWEVENT_RESIZED = getattr(pygame, "WINDOWEVENT_RESIZED", None)
 
 
 class MazeGame:
@@ -69,7 +87,15 @@ class MazeGame:
         self.screen = None
         self.screen_w = 800
         self.screen_h = 600
+        self._inside_resize_callback = False
+        self._wndproc = None
+        self._original_wndproc = None
+        self._hooked_hwnd = None
+        self._set_window_long_ptr = None
+        self._call_window_proc = None
+        self._user32 = None
         self._create_screen(self.screen_w, self.screen_h)
+        self._setup_resize_hook()
 
         self.clock = pygame.time.Clock()
         self.running = True
@@ -101,6 +127,7 @@ class MazeGame:
         )
         # Update dimensions from display manager (may differ due to clamping)
         self.screen_w, self.screen_h = self.display_manager.get_size()
+        self._setup_resize_hook()
 
     def _resize_screen_for_level(self, level):
         """Resize screen to fit level using camera system"""
@@ -134,14 +161,18 @@ class MazeGame:
 
     def handle_events(self):
         """Handle input events"""
+        # Poll current size each frame so resize updates also work during drag.
+        if self._check_live_resize():
+            self.render()
+
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self.running = False
                 return
 
-            # Window resize event
-            if event.type == pygame.VIDEORESIZE:
-                self._handle_window_resize(event.w, event.h)
+            resize_size = self._extract_resize_event_size(event)
+            if resize_size:
+                self._handle_window_resize(*resize_size)
                 continue
 
             if event.type == pygame.KEYDOWN:
@@ -152,6 +183,33 @@ class MazeGame:
                         self._toggle_fullscreen()
                         continue
                 self._handle_keydown(event.key)
+
+    def _extract_resize_event_size(self, event):
+        """Return (w, h) for resize events across pygame versions."""
+        if event.type == pygame.VIDEORESIZE:
+            return (event.w, event.h)
+
+        if WINDOWSIZECHANGED_EVENT is not None and event.type == WINDOWSIZECHANGED_EVENT:
+            return (
+                getattr(event, "x", getattr(event, "w", self.screen_w)),
+                getattr(event, "y", getattr(event, "h", self.screen_h))
+            )
+
+        if WINDOWRESIZED_EVENT is not None and event.type == WINDOWRESIZED_EVENT:
+            return (
+                getattr(event, "x", getattr(event, "w", self.screen_w)),
+                getattr(event, "y", getattr(event, "h", self.screen_h))
+            )
+
+        if WINDOWEVENT_EVENT is not None and event.type == WINDOWEVENT_EVENT:
+            subevent = getattr(event, "event", None)
+            if subevent in (WINDOWEVENT_SIZE_CHANGED, WINDOWEVENT_RESIZED):
+                return (
+                    getattr(event, "x", getattr(event, "w", self.screen_w)),
+                    getattr(event, "y", getattr(event, "h", self.screen_h))
+                )
+
+        return None
 
     def _handle_keydown(self, key):
         """Handle key press based on current state"""
@@ -325,9 +383,167 @@ class MazeGame:
         self.save_message_timer = duration
         self.save_message_text = text
 
+    def _setup_resize_hook(self):
+        """Install Win32 WndProc hook for real-time resize paint while dragging."""
+        if sys.platform != 'win32':
+            return
+
+        try:
+            wm_info = pygame.display.get_wm_info()
+            hwnd = wm_info.get('window')
+        except Exception:
+            return
+
+        if not hwnd:
+            return
+
+        if self._hooked_hwnd == hwnd and self._wndproc is not None:
+            return
+
+        self._teardown_resize_hook()
+
+        user32 = ctypes.windll.user32
+        ptr_size = ctypes.sizeof(ctypes.c_void_p)
+        long_ptr_t = ctypes.c_longlong if ptr_size == 8 else ctypes.c_long
+        wndproc_t = ctypes.WINFUNCTYPE(
+            long_ptr_t,
+            ctypes.wintypes.HWND,
+            ctypes.wintypes.UINT,
+            ctypes.wintypes.WPARAM,
+            ctypes.wintypes.LPARAM
+        )
+
+        call_window_proc = user32.CallWindowProcW
+        call_window_proc.restype = long_ptr_t
+        call_window_proc.argtypes = [
+            long_ptr_t,
+            ctypes.wintypes.HWND,
+            ctypes.wintypes.UINT,
+            ctypes.wintypes.WPARAM,
+            ctypes.wintypes.LPARAM
+        ]
+
+        set_window_long_ptr = user32.SetWindowLongPtrW
+        set_window_long_ptr.restype = long_ptr_t
+        set_window_long_ptr.argtypes = [
+            ctypes.wintypes.HWND,
+            ctypes.c_int,
+            long_ptr_t
+        ]
+
+        get_client_rect = user32.GetClientRect
+        get_client_rect.restype = ctypes.c_int
+        get_client_rect.argtypes = [
+            ctypes.wintypes.HWND,
+            ctypes.POINTER(ctypes.wintypes.RECT)
+        ]
+
+        WM_SIZE = 0x0005
+        WM_SIZING = 0x0214
+        GWL_WNDPROC = -4
+
+        def _wndproc(hwnd_arg, msg, wparam, lparam):
+            result = call_window_proc(
+                self._original_wndproc,
+                hwnd_arg, msg, wparam, lparam
+            )
+
+            if msg in (WM_SIZE, WM_SIZING):
+                self._on_resize_hook_message(hwnd_arg, get_client_rect)
+
+            return result
+
+        self._wndproc = wndproc_t(_wndproc)
+        self._call_window_proc = call_window_proc
+        self._set_window_long_ptr = set_window_long_ptr
+        self._user32 = user32
+        self._hooked_hwnd = hwnd
+
+        wndproc_ptr = ctypes.cast(self._wndproc, ctypes.c_void_p).value
+        self._original_wndproc = set_window_long_ptr(
+            hwnd,
+            GWL_WNDPROC,
+            wndproc_ptr
+        )
+
+        if not self._original_wndproc:
+            self._teardown_resize_hook()
+
+    def _teardown_resize_hook(self):
+        """Restore original Win32 WndProc hook."""
+        if sys.platform != 'win32':
+            return
+
+        if self._set_window_long_ptr and self._hooked_hwnd and self._original_wndproc:
+            try:
+                self._set_window_long_ptr(self._hooked_hwnd, -4, self._original_wndproc)
+            except Exception:
+                pass
+
+        self._wndproc = None
+        self._original_wndproc = None
+        self._hooked_hwnd = None
+        self._set_window_long_ptr = None
+        self._call_window_proc = None
+        self._user32 = None
+        self._inside_resize_callback = False
+
+    def _on_resize_hook_message(self, hwnd, get_client_rect):
+        """Handle WM_SIZE/WM_SIZING while Windows keeps app in modal resize loop."""
+        if self.display_manager.is_fullscreen() or self._inside_resize_callback:
+            return
+
+        rect = ctypes.wintypes.RECT()
+        if not get_client_rect(hwnd, ctypes.byref(rect)):
+            return
+
+        new_w = rect.right - rect.left
+        new_h = rect.bottom - rect.top
+
+        if new_w <= 0 or new_h <= 0:
+            return
+
+        surface = pygame.display.get_surface()
+        if surface:
+            surface_w, surface_h = surface.get_size()
+            if surface_w > 0 and surface_h > 0:
+                new_w, new_h = surface_w, surface_h
+
+        if new_w == self.screen_w and new_h == self.screen_h:
+            return
+
+        self._inside_resize_callback = True
+        try:
+            changed, new_w, new_h = self.display_manager.sync_size(
+                new_w,
+                new_h,
+                surface=surface,
+                trigger_callback=True
+            )
+            if not changed:
+                return
+
+            self.screen = self.display_manager.get_screen()
+            self.screen_w = new_w
+            self.screen_h = new_h
+            self.render()
+        finally:
+            self._inside_resize_callback = False
+
+    def _check_live_resize(self):
+        """Check live resize changes between resize events."""
+        pygame.event.pump()
+        changed, new_w, new_h = self.display_manager.check_live_resize()
+        if changed:
+            self.screen = self.display_manager.get_screen()
+            self.screen_w = new_w
+            self.screen_h = new_h
+        return changed
+
     def _toggle_fullscreen(self):
         """Toggle between fullscreen and windowed mode"""
         new_w, new_h = self.display_manager.toggle_fullscreen()
+        self._setup_resize_hook()
         self.screen = self.display_manager.get_screen()
         self.screen_w = new_w
         self.screen_h = new_h
@@ -1048,6 +1264,7 @@ class MazeGame:
             self.update(dt)
             self.render()
 
+        self._teardown_resize_hook()
         pygame.quit()
         sys.exit()
 
