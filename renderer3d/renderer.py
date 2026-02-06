@@ -1,9 +1,11 @@
 """
-3D Scene Renderer - Main rendering pipeline for first-person view
-Draws ceiling, floor, walls, entities, and HUD
+3D Scene Renderer - Optimized with NumPy frame buffer
+High-performance first-person view rendering using surfarray
 """
 
 import pygame
+import pygame.surfarray
+import numpy as np
 import math
 from .raycaster import Raycaster
 from .textures import TextureManager
@@ -18,7 +20,7 @@ from utils.colors import (
 
 class Renderer3D:
     """
-    Main 3D renderer using raycasting
+    Optimized 3D renderer using NumPy frame buffer and surfarray
     """
 
     def __init__(self, screen_width, screen_height, fov=60):
@@ -32,45 +34,145 @@ class Renderer3D:
         self.screen_width = screen_width
         self.screen_height = screen_height
         self.fov = fov
-
-        # Rendering height (excluding HUD)
         self.render_height = screen_height
 
         # Initialize components
         self.raycaster = Raycaster(fov=fov, num_rays=screen_width)
         self.texture_manager = TextureManager(texture_size=64)
 
-        # Pre-load textures
+        # Pre-load textures as NumPy arrays
         self.wall_textures = self.texture_manager.get_wall_textures()
+        self.wall_texture_arrays = self.texture_manager.get_wall_texture_arrays()
 
         # Ceiling and floor colors
-        self.ceiling_color_top = (30, 35, 45)
-        self.ceiling_color_bottom = (50, 55, 65)
-        self.floor_color_top = (40, 35, 30)
-        self.floor_color_bottom = (20, 18, 15)
+        self.ceiling_color_top = np.array([30, 35, 45], dtype=np.uint8)
+        self.ceiling_color_bottom = np.array([50, 55, 65], dtype=np.uint8)
+        self.floor_color_top = np.array([40, 35, 30], dtype=np.uint8)
+        self.floor_color_bottom = np.array([20, 18, 15], dtype=np.uint8)
+
+        # Frame buffer - RGB array (width, height, 3)
+        self.frame_buffer = np.zeros((screen_width, screen_height, 3), dtype=np.uint8)
+
+        # Pre-compute gradients
+        self._init_gradients()
 
         # Z-buffer for sprite sorting
-        self.z_buffer = [float('inf')] * screen_width
+        self.z_buffer = np.full(screen_width, float('inf'), dtype=np.float32)
 
-        # Sprite rendering cache
+        # Pre-rendered sprite surfaces
         self._sprite_cache = {}
+        self._init_sprite_surfaces()
+
+    def _init_gradients(self):
+        """Pre-compute ceiling and floor gradients"""
+        half_h = self.render_height // 2
+
+        # Ceiling gradient (top to middle)
+        if half_h > 0:
+            t = np.linspace(0, 1, half_h).reshape(-1, 1)
+            self.ceiling_gradient = (
+                self.ceiling_color_top + t * (self.ceiling_color_bottom - self.ceiling_color_top)
+            ).astype(np.uint8)
+
+            # Floor gradient (middle to bottom)
+            floor_h = self.render_height - half_h
+            t = np.linspace(0, 1, floor_h).reshape(-1, 1)
+            self.floor_gradient = (
+                self.floor_color_top + t * (self.floor_color_bottom - self.floor_color_top)
+            ).astype(np.uint8)
+        else:
+            self.ceiling_gradient = np.array([[30, 35, 45]], dtype=np.uint8)
+            self.floor_gradient = np.array([[20, 18, 15]], dtype=np.uint8)
+
+    def _init_sprite_surfaces(self):
+        """Pre-render sprite surfaces for fast blitting"""
+        sprite_size = 64
+
+        # Goal - green circle
+        self._sprite_cache['goal'] = self._create_circle_surface(sprite_size, COLOR_GOAL)
+
+        # Enemies - diamond shapes
+        self._sprite_cache['enemy_patrol'] = self._create_diamond_surface(sprite_size, COLOR_ENEMY_PATROL)
+        self._sprite_cache['enemy_chase'] = self._create_diamond_surface(sprite_size, COLOR_ENEMY_CHASE)
+        self._sprite_cache['enemy_teleport'] = self._create_diamond_surface(sprite_size, COLOR_ENEMY_TELEPORT)
+        self._sprite_cache['enemy_smart'] = self._create_diamond_surface(sprite_size, COLOR_ENEMY_SMART)
+
+        # Power-ups - small circles
+        self._sprite_cache['powerup_speed'] = self._create_circle_surface(sprite_size, COLOR_POWERUP_SPEED)
+        self._sprite_cache['powerup_vision'] = self._create_circle_surface(sprite_size, COLOR_POWERUP_VISION)
+        self._sprite_cache['powerup_invincible'] = self._create_circle_surface(sprite_size, COLOR_POWERUP_INVINCIBLE)
+        self._sprite_cache['powerup_energy'] = self._create_circle_surface(sprite_size, COLOR_POWERUP_ENERGY)
+
+        # Trap - triangle
+        self._sprite_cache['trap'] = self._create_triangle_surface(sprite_size, COLOR_TRAP_SPIKE)
+
+        # Key - key shape
+        self._sprite_cache['key'] = self._create_key_surface(sprite_size, (255, 220, 100))
+
+        # Boss - large hexagon
+        self._sprite_cache['boss'] = self._create_hexagon_surface(sprite_size, (180, 50, 50))
+
+    def _create_circle_surface(self, size, color):
+        """Create a circle sprite surface with transparency"""
+        surface = pygame.Surface((size, size), pygame.SRCALPHA)
+        pygame.draw.circle(surface, color, (size // 2, size // 2), size // 2 - 2)
+        return surface
+
+    def _create_diamond_surface(self, size, color):
+        """Create a diamond sprite surface"""
+        surface = pygame.Surface((size, size), pygame.SRCALPHA)
+        half = size // 2
+        points = [(half, 2), (size - 2, half), (half, size - 2), (2, half)]
+        pygame.draw.polygon(surface, color, points)
+        return surface
+
+    def _create_triangle_surface(self, size, color):
+        """Create a triangle sprite surface"""
+        surface = pygame.Surface((size, size), pygame.SRCALPHA)
+        points = [(size // 2, 2), (size - 2, size - 2), (2, size - 2)]
+        pygame.draw.polygon(surface, color, points)
+        return surface
+
+    def _create_key_surface(self, size, color):
+        """Create a key sprite surface"""
+        surface = pygame.Surface((size, size), pygame.SRCALPHA)
+        # Key head (circle)
+        pygame.draw.circle(surface, color, (size // 2, size // 4), size // 5)
+        # Key shaft
+        pygame.draw.rect(surface, color, (size // 2 - 3, size // 3, 6, size // 2))
+        # Key teeth
+        pygame.draw.rect(surface, color, (size // 2, size * 2 // 3, size // 6, 4))
+        return surface
+
+    def _create_hexagon_surface(self, size, color):
+        """Create a hexagon sprite surface"""
+        surface = pygame.Surface((size, size), pygame.SRCALPHA)
+        cx, cy = size // 2, size // 2
+        r = size // 2 - 2
+        points = []
+        for i in range(6):
+            angle = math.pi / 6 + i * math.pi / 3
+            x = cx + int(r * math.cos(angle))
+            y = cy + int(r * math.sin(angle))
+            points.append((x, y))
+        pygame.draw.polygon(surface, color, points)
+        return surface
 
     def set_render_area(self, width, height):
-        """
-        Update render area dimensions
-
-        Args:
-            width, height: New dimensions
-        """
+        """Update render area dimensions"""
         self.screen_width = width
         self.screen_height = height
         self.render_height = height
         self.raycaster.set_resolution(width)
-        self.z_buffer = [float('inf')] * width
+
+        # Reinitialize frame buffer and gradients
+        self.frame_buffer = np.zeros((width, height, 3), dtype=np.uint8)
+        self.z_buffer = np.full(width, float('inf'), dtype=np.float32)
+        self._init_gradients()
 
     def render(self, screen, player, level, fog_manager=None):
         """
-        Render the 3D view
+        Render the 3D view using NumPy frame buffer
 
         Args:
             screen: pygame.Surface to render to
@@ -79,66 +181,51 @@ class Renderer3D:
             fog_manager: Optional FogManager for visibility
         """
         # Clear z-buffer
-        for i in range(len(self.z_buffer)):
-            self.z_buffer[i] = float('inf')
+        self.z_buffer.fill(float('inf'))
 
-        # 1. Draw ceiling
-        self._draw_ceiling(screen)
+        # 1. Draw ceiling and floor to frame buffer
+        self._draw_ceiling_floor()
 
-        # 2. Draw floor
-        self._draw_floor(screen)
+        # 2. Cast rays and draw walls to frame buffer
+        self._draw_walls(player, level.walls, level.cols, level.rows)
 
-        # 3. Cast rays and draw walls
-        self._draw_walls(screen, player, level.walls, level.cols, level.rows)
+        # 3. Create render surface and blit frame buffer
+        # Use subsurface if screen is larger than render area
+        screen_w, screen_h = screen.get_size()
+        if screen_w == self.screen_width and screen_h == self.render_height:
+            # Same size - blit directly
+            pygame.surfarray.blit_array(screen, self.frame_buffer)
+            render_surface = screen
+        else:
+            # Different size - create temp surface
+            render_surface = pygame.Surface((self.screen_width, self.render_height))
+            pygame.surfarray.blit_array(render_surface, self.frame_buffer)
+            screen.blit(render_surface, (0, 0))
 
-        # 4. Draw entities (sprites)
+        # 4. Draw entities (sprites) directly to screen
         self._draw_entities(screen, player, level, fog_manager)
 
-    def _draw_ceiling(self, screen):
-        """Draw gradient ceiling"""
-        half_height = self.render_height // 2
+    def _draw_ceiling_floor(self):
+        """Draw gradient ceiling and floor to frame buffer"""
+        half_h = self.render_height // 2
 
-        for y in range(half_height):
-            # Gradient from top to horizon
-            t = y / half_height
-            r = int(self.ceiling_color_top[0] + (self.ceiling_color_bottom[0] - self.ceiling_color_top[0]) * t)
-            g = int(self.ceiling_color_top[1] + (self.ceiling_color_bottom[1] - self.ceiling_color_top[1]) * t)
-            b = int(self.ceiling_color_top[2] + (self.ceiling_color_bottom[2] - self.ceiling_color_top[2]) * t)
+        # Apply ceiling gradient to all columns
+        self.frame_buffer[:, :half_h] = self.ceiling_gradient
 
-            pygame.draw.line(screen, (r, g, b), (0, y), (self.screen_width, y))
+        # Apply floor gradient to all columns
+        self.frame_buffer[:, half_h:] = self.floor_gradient
 
-    def _draw_floor(self, screen):
-        """Draw gradient floor"""
-        half_height = self.render_height // 2
-
-        for y in range(half_height, self.render_height):
-            # Gradient from horizon to bottom
-            t = (y - half_height) / half_height
-            r = int(self.floor_color_top[0] + (self.floor_color_bottom[0] - self.floor_color_top[0]) * t)
-            g = int(self.floor_color_top[1] + (self.floor_color_bottom[1] - self.floor_color_top[1]) * t)
-            b = int(self.floor_color_top[2] + (self.floor_color_bottom[2] - self.floor_color_top[2]) * t)
-
-            pygame.draw.line(screen, (r, g, b), (0, y), (self.screen_width, y))
-
-    def _draw_walls(self, screen, player, walls, cols, rows):
-        """
-        Draw walls using raycasting
-
-        Args:
-            screen: pygame.Surface
-            player: Player3D instance
-            walls: Maze walls array
-            cols, rows: Maze dimensions
-        """
+    def _draw_walls(self, player, walls, cols, rows):
+        """Draw walls using raycasting with NumPy optimization"""
         px, py = player.world_x, player.world_y
         angle = player.angle
 
         # Cast all rays
         ray_results = self.raycaster.cast_all_rays(walls, cols, rows, px, py, angle)
 
-        # Get textures
-        tex_ns = self.wall_textures['ns']
-        tex_ew = self.wall_textures['ew']
+        # Get texture arrays
+        tex_ns = self.wall_texture_arrays['ns']
+        tex_ew = self.wall_texture_arrays['ew']
         tex_size = self.texture_manager.texture_size
 
         # Draw each vertical slice
@@ -151,160 +238,104 @@ class Renderer3D:
 
             # Calculate wall height on screen
             wall_height = int(self.render_height / corrected_dist)
+            if wall_height <= 0:
+                continue
 
             # Calculate vertical position
             draw_start = max(0, (self.render_height - wall_height) // 2)
             draw_end = min(self.render_height, (self.render_height + wall_height) // 2)
+            draw_height = draw_end - draw_start
+
+            if draw_height <= 0:
+                continue
 
             # Get texture X coordinate
             tex_x = self.raycaster.get_wall_texture_x(hit_x, hit_y, side, wall_dir)
             tex_x_pixel = int(tex_x * tex_size) % tex_size
 
-            # Select texture based on wall direction
+            # Select texture array based on wall direction
             if wall_dir in (TOP, BOTTOM):
                 texture = tex_ns
             else:
                 texture = tex_ew
 
-            # Apply distance shading
+            # Calculate shading
             shade = max(0.3, min(1.0, 1.0 - (corrected_dist / 15.0)))
-
-            # Additional shading for E/W walls (darker)
             if side == 1:
                 shade *= 0.8
 
-            # Draw vertical texture slice
-            if wall_height > 0:
-                self._draw_texture_slice(
-                    screen, texture, x,
-                    draw_start, draw_end, wall_height,
-                    tex_x_pixel, tex_size, shade
-                )
+            # Get texture column and sample it
+            tex_column = texture[tex_x_pixel, :]
 
-    def _draw_texture_slice(self, screen, texture, x, draw_start, draw_end, wall_height, tex_x, tex_size, shade):
-        """
-        Draw a single vertical texture slice
+            # Calculate texture Y indices for each screen pixel
+            tex_y_start = (draw_start - (self.render_height - wall_height) / 2) / wall_height * tex_size
+            tex_y_end = (draw_end - (self.render_height - wall_height) / 2) / wall_height * tex_size
 
-        Args:
-            screen: pygame.Surface
-            texture: Texture surface
-            x: Screen X position
-            draw_start, draw_end: Vertical range to draw
-            wall_height: Full wall height on screen
-            tex_x: Texture X coordinate (pixel)
-            tex_size: Texture dimensions
-            shade: Shading factor (0.0 to 1.0)
-        """
-        if draw_end <= draw_start:
-            return
+            # Create indices for texture sampling
+            tex_y_indices = np.linspace(tex_y_start, tex_y_end, draw_height).astype(np.int32)
+            tex_y_indices = np.clip(tex_y_indices, 0, tex_size - 1)
 
-        # Calculate texture step
-        tex_step = tex_size / wall_height
-        tex_y = (draw_start - (self.render_height - wall_height) / 2) * tex_step
+            # Sample texture and apply shading
+            sampled = tex_column[tex_y_indices].astype(np.float32) * shade
+            sampled = np.clip(sampled, 0, 255).astype(np.uint8)
 
-        for y in range(draw_start, draw_end):
-            # Get texture Y coordinate
-            tex_y_pixel = int(tex_y) % tex_size
-            tex_y += tex_step
-
-            # Get color from texture
-            color = texture.get_at((tex_x, tex_y_pixel))[:3]
-
-            # Apply shading
-            r = int(color[0] * shade)
-            g = int(color[1] * shade)
-            b = int(color[2] * shade)
-
-            screen.set_at((x, y), (r, g, b))
+            # Write to frame buffer
+            self.frame_buffer[x, draw_start:draw_end] = sampled
 
     def _draw_entities(self, screen, player, level, fog_manager):
-        """
-        Draw all entities as sprites (billboard style)
-
-        Args:
-            screen: pygame.Surface
-            player: Player3D instance
-            level: Level instance
-            fog_manager: Optional FogManager
-        """
+        """Draw all entities as sprites using pre-rendered surfaces"""
         sprites = []
 
-        # Collect all visible entities
         px, py = player.world_x, player.world_y
         p_angle = player.angle
 
+        # Collect all visible entities
         # Goal
         gx, gy = level.goal_pos
         if self._is_visible(gx, gy, fog_manager):
             sprites.append({
-                'x': gx + 0.5,
-                'y': gy + 0.5,
-                'color': COLOR_GOAL,
-                'type': 'goal',
-                'size': 0.6,
-                'pulse': True
+                'x': gx + 0.5, 'y': gy + 0.5,
+                'surface': self._sprite_cache['goal'],
+                'size': 0.6, 'pulse': True
             })
 
         # Enemies
         for enemy in level.enemy_manager.enemies:
             if self._is_visible(enemy.x, enemy.y, fog_manager):
-                # Get enemy color based on type
-                if hasattr(enemy, 'enemy_type'):
-                    if enemy.enemy_type == 'patrol':
-                        color = COLOR_ENEMY_PATROL
-                    elif enemy.enemy_type == 'chase':
-                        color = COLOR_ENEMY_CHASE
-                    elif enemy.enemy_type == 'teleport':
-                        color = COLOR_ENEMY_TELEPORT
-                    elif enemy.enemy_type == 'smart':
-                        color = COLOR_ENEMY_SMART
-                    else:
-                        color = COLOR_ENEMY_PATROL
-                else:
-                    color = enemy.get_color() if hasattr(enemy, 'get_color') else COLOR_ENEMY_PATROL
-
+                enemy_type = getattr(enemy, 'enemy_type', 'patrol')
+                cache_key = f'enemy_{enemy_type}'
+                surface = self._sprite_cache.get(cache_key, self._sprite_cache['enemy_patrol'])
                 sprites.append({
-                    'x': enemy.x + 0.5,
-                    'y': enemy.y + 0.5,
-                    'color': color,
-                    'type': 'enemy',
-                    'size': 0.5
+                    'x': enemy.x + 0.5, 'y': enemy.y + 0.5,
+                    'surface': surface, 'size': 0.5
                 })
 
         # Power-ups
         for powerup in level.powerup_manager.get_uncollected_powerups():
             if self._is_visible(powerup.x, powerup.y, fog_manager):
-                color = powerup.get_color() if hasattr(powerup, 'get_color') else COLOR_POWERUP_ENERGY
+                powerup_type = getattr(powerup, 'powerup_type', 'energy')
+                cache_key = f'powerup_{powerup_type}'
+                surface = self._sprite_cache.get(cache_key, self._sprite_cache['powerup_energy'])
                 sprites.append({
-                    'x': powerup.x + 0.5,
-                    'y': powerup.y + 0.5,
-                    'color': color,
-                    'type': 'powerup',
-                    'size': 0.3,
-                    'pulse': True
+                    'x': powerup.x + 0.5, 'y': powerup.y + 0.5,
+                    'surface': surface, 'size': 0.3, 'pulse': True
                 })
 
         # Keys
         for key in level.door_manager.keys:
             if not key.collected and self._is_visible(key.x, key.y, fog_manager):
-                color = key.get_color_rgb() if hasattr(key, 'get_color_rgb') else (255, 220, 100)
                 sprites.append({
-                    'x': key.x + 0.5,
-                    'y': key.y + 0.5,
-                    'color': color,
-                    'type': 'key',
+                    'x': key.x + 0.5, 'y': key.y + 0.5,
+                    'surface': self._sprite_cache['key'],
                     'size': 0.35
                 })
 
-        # Traps (visible ones)
+        # Traps
         for trap in level.trap_manager.get_visible_traps():
             if self._is_visible(trap.x, trap.y, fog_manager):
-                color = trap.get_color() if hasattr(trap, 'get_color') else COLOR_TRAP_SPIKE
                 sprites.append({
-                    'x': trap.x + 0.5,
-                    'y': trap.y + 0.5,
-                    'color': color,
-                    'type': 'trap',
+                    'x': trap.x + 0.5, 'y': trap.y + 0.5,
+                    'surface': self._sprite_cache['trap'],
                     'size': 0.4
                 })
 
@@ -313,21 +344,18 @@ class Renderer3D:
             boss = level.boss_manager.get_boss()
             if boss and boss.alive and self._is_visible(boss.x, boss.y, fog_manager):
                 sprites.append({
-                    'x': boss.x + 0.5,
-                    'y': boss.y + 0.5,
-                    'color': boss.get_color() if hasattr(boss, 'get_color') else (180, 50, 50),
-                    'type': 'boss',
+                    'x': boss.x + 0.5, 'y': boss.y + 0.5,
+                    'surface': self._sprite_cache['boss'],
                     'size': 1.0
                 })
 
-        # Sort sprites by distance (farthest first)
+        # Calculate distance and angle for each sprite
         for sprite in sprites:
             dx = sprite['x'] - px
             dy = sprite['y'] - py
             sprite['dist'] = math.sqrt(dx * dx + dy * dy)
-            # Calculate angle to sprite
-            sprite['angle'] = math.atan2(dy, dx)
 
+        # Sort by distance (farthest first)
         sprites.sort(key=lambda s: s['dist'], reverse=True)
 
         # Draw sprites
@@ -341,34 +369,32 @@ class Renderer3D:
         return fog_manager.is_visible(x, y)
 
     def _draw_sprite(self, screen, sprite, player):
-        """
-        Draw a single sprite
-
-        Args:
-            screen: pygame.Surface
-            sprite: Sprite data dict
-            player: Player3D instance
-        """
+        """Draw a single sprite using pre-rendered surface"""
         px, py = player.world_x, player.world_y
         p_angle = player.angle
 
-        # Calculate relative position
         dx = sprite['x'] - px
         dy = sprite['y'] - py
         dist = sprite['dist']
 
         if dist < 0.1:
-            return  # Too close
+            return
 
-        # Check if in front of player
         # Transform to player view space
-        inv_det = 1.0 / (math.cos(p_angle + math.pi / 2) * math.sin(p_angle) -
-                         math.sin(p_angle + math.pi / 2) * math.cos(p_angle))
+        cos_a = math.cos(p_angle)
+        sin_a = math.sin(p_angle)
+        cos_a_perp = math.cos(p_angle + math.pi / 2)
+        sin_a_perp = math.sin(p_angle + math.pi / 2)
 
-        transform_x = inv_det * (math.cos(p_angle + math.pi / 2) * dx - math.cos(p_angle) * dy)
-        transform_y = inv_det * (-math.sin(p_angle + math.pi / 2) * dx + math.sin(p_angle) * dy)
+        det = cos_a_perp * sin_a - sin_a_perp * cos_a
+        if abs(det) < 0.0001:
+            return
 
-        if transform_y <= 0:
+        inv_det = 1.0 / det
+        transform_x = inv_det * (cos_a_perp * dx - cos_a * dy)
+        transform_y = inv_det * (-sin_a_perp * dx + sin_a * dy)
+
+        if transform_y <= 0.1:
             return  # Behind player
 
         # Calculate screen position
@@ -379,89 +405,53 @@ class Renderer3D:
         sprite_height = int(abs(self.render_height / transform_y) * base_size)
         sprite_width = sprite_height
 
-        # Vertical position
-        draw_start_y = max(0, self.render_height // 2 - sprite_height // 2)
-        draw_end_y = min(self.render_height, self.render_height // 2 + sprite_height // 2)
+        if sprite_width <= 0 or sprite_height <= 0:
+            return
 
-        # Horizontal position
-        draw_start_x = max(0, sprite_screen_x - sprite_width // 2)
-        draw_end_x = min(self.screen_width, sprite_screen_x + sprite_width // 2)
+        # Clamp size
+        sprite_width = min(sprite_width, self.screen_width * 2)
+        sprite_height = min(sprite_height, self.render_height * 2)
 
-        # Pulsing effect
-        pulse_factor = 1.0
-        if sprite.get('pulse', False):
-            pulse_factor = 0.8 + 0.2 * abs(math.sin(pygame.time.get_ticks() * 0.005))
+        # Calculate position
+        draw_x = sprite_screen_x - sprite_width // 2
+        draw_y = self.render_height // 2 - sprite_height // 2
 
-        # Distance shading
+        # Check if on screen
+        if draw_x + sprite_width < 0 or draw_x >= self.screen_width:
+            return
+        if draw_y + sprite_height < 0 or draw_y >= self.render_height:
+            return
+
+        # Check z-buffer for visibility
+        screen_x_start = max(0, draw_x)
+        screen_x_end = min(self.screen_width, draw_x + sprite_width)
+
+        visible = False
+        for x in range(screen_x_start, screen_x_end):
+            if transform_y < self.z_buffer[x]:
+                visible = True
+                break
+
+        if not visible:
+            return
+
+        # Scale sprite surface
+        scaled = pygame.transform.scale(sprite['surface'], (sprite_width, sprite_height))
+
+        # Apply distance shading
         shade = max(0.3, min(1.0, 1.0 - (dist / 12.0)))
 
-        # Apply pulsing and shading to color
-        r = int(min(255, sprite['color'][0] * shade * pulse_factor))
-        g = int(min(255, sprite['color'][1] * shade * pulse_factor))
-        b = int(min(255, sprite['color'][2] * shade * pulse_factor))
-        color = (r, g, b)
+        # Apply pulsing effect
+        if sprite.get('pulse', False):
+            pulse = 0.8 + 0.2 * abs(math.sin(pygame.time.get_ticks() * 0.005))
+            shade *= pulse
 
-        # Draw sprite (only pixels not behind walls)
-        for x in range(draw_start_x, draw_end_x):
-            if x < 0 or x >= self.screen_width:
-                continue
-            if transform_y >= self.z_buffer[x]:
-                continue  # Behind wall
+        if shade < 0.99:
+            # Create darkened copy
+            dark_overlay = pygame.Surface((sprite_width, sprite_height))
+            dark_overlay.fill((0, 0, 0))
+            dark_overlay.set_alpha(int(255 * (1 - shade)))
+            scaled.blit(dark_overlay, (0, 0))
 
-            # Draw vertical stripe of sprite
-            sprite_type = sprite['type']
-
-            for y in range(draw_start_y, draw_end_y):
-                # Calculate position within sprite
-                rel_x = (x - draw_start_x) / max(1, draw_end_x - draw_start_x)
-                rel_y = (y - draw_start_y) / max(1, draw_end_y - draw_start_y)
-
-                # Different shapes based on type
-                draw = False
-
-                if sprite_type == 'goal':
-                    # Circle
-                    cx, cy = 0.5, 0.5
-                    dist_to_center = math.sqrt((rel_x - cx) ** 2 + (rel_y - cy) ** 2)
-                    draw = dist_to_center < 0.4
-
-                elif sprite_type == 'enemy':
-                    # Diamond shape
-                    cx, cy = 0.5, 0.5
-                    dist_to_center = abs(rel_x - cx) + abs(rel_y - cy)
-                    draw = dist_to_center < 0.45
-
-                elif sprite_type == 'boss':
-                    # Large hexagon
-                    cx, cy = 0.5, 0.5
-                    # Approximate hexagon as a large diamond
-                    dist_to_center = abs(rel_x - cx) * 0.8 + abs(rel_y - cy)
-                    draw = dist_to_center < 0.45
-
-                elif sprite_type == 'powerup':
-                    # Small circle
-                    cx, cy = 0.5, 0.5
-                    dist_to_center = math.sqrt((rel_x - cx) ** 2 + (rel_y - cy) ** 2)
-                    draw = dist_to_center < 0.35
-
-                elif sprite_type == 'key':
-                    # Key shape (circle on top, rectangle below)
-                    if rel_y < 0.5:
-                        cx, cy = 0.5, 0.25
-                        dist_to_center = math.sqrt((rel_x - cx) ** 2 + (rel_y - cy) ** 2)
-                        draw = dist_to_center < 0.2
-                    else:
-                        draw = 0.4 < rel_x < 0.6
-
-                elif sprite_type == 'trap':
-                    # Triangle (pointing up)
-                    if rel_y > 0.2:
-                        width_at_y = (rel_y - 0.2) * 0.8
-                        draw = abs(rel_x - 0.5) < width_at_y
-
-                else:
-                    # Default square
-                    draw = 0.1 < rel_x < 0.9 and 0.1 < rel_y < 0.9
-
-                if draw:
-                    screen.set_at((x, y), color)
+        # Blit to screen
+        screen.blit(scaled, (draw_x, draw_y))

@@ -4,6 +4,8 @@ Generates brick and stone textures without external files
 """
 
 import pygame
+import pygame.surfarray
+import numpy as np
 import random
 import math
 
@@ -51,6 +53,37 @@ class TextureManager:
                 self._cache[cache_key] = self._generate_solid(base_color or (128, 128, 128))
 
         return self._cache[cache_key]
+
+    def get_texture_array(self, texture_type, base_color=None):
+        """
+        Get texture as NumPy array for fast pixel access
+
+        Args:
+            texture_type: 'brick', 'stone', 'metal', 'wood'
+            base_color: Base color tuple (R, G, B), or None for default
+
+        Returns:
+            numpy.ndarray with shape (width, height, 3)
+        """
+        array_cache_key = ('array', texture_type, base_color, self.texture_size)
+
+        if array_cache_key not in self._cache:
+            surface = self.get_texture(texture_type, base_color)
+            self._cache[array_cache_key] = pygame.surfarray.array3d(surface)
+
+        return self._cache[array_cache_key]
+
+    def get_wall_texture_arrays(self):
+        """
+        Get wall textures as NumPy arrays for fast rendering
+
+        Returns:
+            dict with 'ns' and 'ew' texture arrays
+        """
+        return {
+            'ns': self.get_texture_array('brick', (140, 80, 60)),
+            'ew': self.get_texture_array('stone', (90, 90, 100)),
+        }
 
     def _generate_brick(self, base_color=None):
         """
