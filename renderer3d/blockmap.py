@@ -16,7 +16,7 @@ def walls_to_blockmap(walls, cols, rows):
 
     Original labirint cols x rows.
     Blok xarita (2*cols+1) x (2*rows+1):
-      - Burchaklar [2*cx, 2*cy]: har doim solid (ustun)
+      - Burchaklar [2*cx, 2*cy]: yonida devor bo'lsa solid
       - Gorizontal devorlar [2*cx+1, 2*cy]: agar TOP/BOTTOM devor bo'lsa
       - Vertikal devorlar [2*cx, 2*cy+1]: agar LEFT/RIGHT devor bo'lsa
       - Ichki maydon [2*cx+1, 2*cy+1]: har doim bo'sh
@@ -67,16 +67,12 @@ def walls_to_blockmap(walls, cols, rows):
             bx = 2 * cx
             by = 2 * cy
             has_neighbor = False
-            # Yuqori devor segmenti [by-1, bx]
             if by > 0 and blockmap[by - 1, bx] > 0:
                 has_neighbor = True
-            # Pastki devor segmenti [by+1, bx]
             if not has_neighbor and by < bm_h - 1 and blockmap[by + 1, bx] > 0:
                 has_neighbor = True
-            # Chap devor segmenti [by, bx-1]
             if not has_neighbor and bx > 0 and blockmap[by, bx - 1] > 0:
                 has_neighbor = True
-            # O'ng devor segmenti [by, bx+1]
             if not has_neighbor and bx < bm_w - 1 and blockmap[by, bx + 1] > 0:
                 has_neighbor = True
             if has_neighbor:
@@ -90,10 +86,9 @@ def pos_to_blockmap(wx, wy):
     """
     O'yinchi pozitsiyasini (world koordinata) blok xarita koordinatalariga o'tkazadi.
 
-    Formulasi: block_pos = 2 * world_pos
-    Sababi: blok xaritada ustunlar juft indekslarda (0,2,4,...) joylashgan
-    va ular world chegaralariga (0.0, 1.0, 2.0, ...) mos keladi.
-    Shuning uchun skalyatsiya aniq 2x.
+    Formulasi: block_pos = 2 * floor(world_pos) + 1 + frac(world_pos)
+    Bu o'yinchini ichki maydon hujayrasining (toq ustun/qator) markaziga joylashtiradi.
+    Masalan: world (1.5, 1.5) -> blockmap (3.5, 3.5) — col 3 (toq, ichki) markazi.
 
     Args:
         wx, wy: world koordinatalari (float)
@@ -101,25 +96,30 @@ def pos_to_blockmap(wx, wy):
     Returns:
         bx, by: blok xarita koordinatalari (float)
     """
-    bx = 2.0 * wx
-    by = 2.0 * wy
+    fx = math.floor(wx)
+    fy = math.floor(wy)
+    frac_x = wx - fx
+    frac_y = wy - fy
+    bx = 2.0 * fx + 1.0 + frac_x
+    by = 2.0 * fy + 1.0 + frac_y
     return bx, by
 
 
 @njit(cache=True)
-def blockmap_cast_all_rays(blockmap, bm_w, bm_h, bpx, bpy,
+def blockmap_cast_all_rays(blockmap, bm_w, bm_h, bpx, bpy, px, py,
                            player_angle, fov_rad, half_fov_rad,
                            num_rays, fish_eye_table):
     """
     Blok xaritada DDA algoritmi bilan nurlarni otish.
 
-    Soddalashtirilgan: har bir blok solid yoki bo'sh.
-    Masofalarni /2.0 ga bo'lib qaytaradi (original world birliklariga).
+    DDA blockmap koordinatalarida ishlaydi (hit detection uchun).
+    Masofalar world koordinatalarida hisoblanadi (map_x/2 formulasi bilan).
 
     Args:
         blockmap: 2D int32 massiv (bm_h, bm_w)
         bm_w, bm_h: blok xarita o'lchamlari
         bpx, bpy: o'yinchi pozitsiyasi blok xarita koordinatalarida
+        px, py: o'yinchi pozitsiyasi world koordinatalarida
         player_angle: o'yinchining ko'rish burchagi (radyan)
         fov_rad: ko'rish maydoni (radyan)
         half_fov_rad: yarim ko'rish maydoni
@@ -129,7 +129,6 @@ def blockmap_cast_all_rays(blockmap, bm_w, bm_h, bpx, bpy,
     Returns:
         results: (num_rays, 6) massiv
                  [dist, side, hit_x, hit_y, wall_dir, corrected_dist]
-                 Masofalar world birliklarida (/2.0)
     """
     results = np.empty((num_rays, 6), dtype=np.float64)
 
@@ -141,7 +140,7 @@ def blockmap_cast_all_rays(blockmap, bm_w, bm_h, bpx, bpy,
     bottom = int32(4)
     left = int32(8)
 
-    max_distance = 200.0  # blok xaritada 2x katta
+    max_distance = 200.0
 
     for i in range(num_rays):
         ray_angle = start_angle + i * angle_step
@@ -161,7 +160,7 @@ def blockmap_cast_all_rays(blockmap, bm_w, bm_h, bpx, bpy,
             else:
                 ray_dir_y = -1e-10
 
-        # Joriy hujayra
+        # Joriy hujayra (blockmap koordinatalarida)
         map_x = int32(int(bpx))
         map_y = int32(int(bpy))
 
@@ -184,7 +183,7 @@ def blockmap_cast_all_rays(blockmap, bm_w, bm_h, bpx, bpy,
             step_y = int32(-1)
             side_dist_y = (bpy - map_y) * delta_dist_y
 
-        # DDA loop
+        # DDA loop — blockmap da hit detection
         hit = False
         side = int32(0)
         wall_dir = top
@@ -224,29 +223,29 @@ def blockmap_cast_all_rays(blockmap, bm_w, bm_h, bpx, bpy,
             if dist_check > max_distance:
                 break
 
-        # Perpendicular masofa hisoblash
+        # World perpendicular masofa hisoblash
+        # Juft ustun/qator = devor/ustun, world chegarasi = index / 2
         if side == 1:
-            perp_wall_dist = side_dist_x - delta_dist_x
+            wall_world_x = map_x / 2.0
+            perp_wall_dist = (wall_world_x - px) / ray_dir_x
         else:
-            perp_wall_dist = side_dist_y - delta_dist_y
+            wall_world_y = map_y / 2.0
+            perp_wall_dist = (wall_world_y - py) / ray_dir_y
 
-        # Urilish nuqtasi (blok xarita koordinatalarida)
-        hit_x_bm = bpx + perp_wall_dist * ray_dir_x
-        hit_y_bm = bpy + perp_wall_dist * ray_dir_y
+        if perp_wall_dist < 0.001:
+            perp_wall_dist = 0.001
 
-        # Masofa world birliklariga qaytarish (/2.0)
-        world_dist = perp_wall_dist / 2.0
+        # Urilish nuqtasi (world koordinatalarida)
+        hit_x = px + perp_wall_dist * ray_dir_x
+        hit_y = py + perp_wall_dist * ray_dir_y
 
         # Fish-eye korreksiyasi
-        corrected_dist = world_dist * fish_eye_table[i]
+        corrected_dist = perp_wall_dist * fish_eye_table[i]
 
-        # hit koordinatalarini blok xaritada qoldiramiz
-        # chunki textura hisoblash hit - int(hit) bilan ishlaydi
-        # va blok xaritada har bir blok 1.0 kenglikda
-        results[i, 0] = world_dist
+        results[i, 0] = perp_wall_dist
         results[i, 1] = float64(side)
-        results[i, 2] = hit_x_bm
-        results[i, 3] = hit_y_bm
+        results[i, 2] = hit_x
+        results[i, 3] = hit_y
         results[i, 4] = float64(wall_dir)
         results[i, 5] = corrected_dist
 

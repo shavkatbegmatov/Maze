@@ -305,7 +305,9 @@ class Raycaster:
 
         return blockmap_cast_all_rays(
             blockmap, int32(bm_w), int32(bm_h),
-            float64(bpx), float64(bpy), float64(player_angle),
+            float64(bpx), float64(bpy),
+            float64(px), float64(py),
+            float64(player_angle),
             float64(self.fov_rad), float64(self.half_fov_rad),
             int32(self.num_rays), self._fish_eye_table
         )
