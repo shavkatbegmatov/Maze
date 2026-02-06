@@ -1,12 +1,13 @@
 """
 3D Scene Renderer - Optimized with NumPy frame buffer
-High-performance first-person view rendering using surfarray
+High-performance first-person view rendering using surfarray + Numba JIT
 """
 
 import pygame
 import pygame.surfarray
 import numpy as np
 import math
+from numba import njit, int32, float64
 from .raycaster import Raycaster
 from .textures import TextureManager
 from utils.constants import TOP, RIGHT, BOTTOM, LEFT
@@ -16,6 +17,126 @@ from utils.colors import (
     COLOR_POWERUP_SPEED, COLOR_POWERUP_VISION, COLOR_POWERUP_INVINCIBLE,
     COLOR_POWERUP_ENERGY, COLOR_TRAP_SPIKE
 )
+
+# Wall bit constants for Numba
+_TOP = int32(TOP)
+_BOTTOM = int32(BOTTOM)
+_RIGHT = int32(RIGHT)
+_LEFT = int32(LEFT)
+
+
+@njit(cache=True)
+def _numba_draw_walls(ray_results, frame_buffer, tex_ns, tex_ew,
+                      render_height, tex_size, z_buffer):
+    """
+    Draw wall slices to frame buffer (Numba JIT compiled)
+
+    Args:
+        ray_results: numpy array (num_rays, 6) from cast_all_rays
+        frame_buffer: numpy array (width, height, 3) uint8
+        tex_ns: numpy array (tex_size, tex_size, 3) uint8 - N/S wall texture
+        tex_ew: numpy array (tex_size, tex_size, 3) uint8 - E/W wall texture
+        render_height: screen height
+        tex_size: texture dimension (e.g. 64)
+        z_buffer: numpy array (width,) float32
+    """
+    top = int32(1)
+    bottom = int32(4)
+    right = int32(2)
+
+    num_rays = ray_results.shape[0]
+
+    for x in range(num_rays):
+        dist = ray_results[x, 0]
+        side = int32(ray_results[x, 1])
+        hit_x = ray_results[x, 2]
+        hit_y = ray_results[x, 3]
+        wall_dir = int32(ray_results[x, 4])
+        corrected_dist = ray_results[x, 5]
+
+        if corrected_dist <= 0.0:
+            corrected_dist = 0.01
+
+        # Store in z-buffer
+        z_buffer[x] = corrected_dist
+
+        # Wall height on screen
+        wall_height = int32(render_height / corrected_dist)
+        if wall_height <= 0:
+            continue
+
+        # Vertical draw bounds
+        draw_start = (render_height - wall_height) // 2
+        if draw_start < 0:
+            draw_start = 0
+        draw_end = (render_height + wall_height) // 2
+        if draw_end > render_height:
+            draw_end = render_height
+        draw_height = draw_end - draw_start
+
+        if draw_height <= 0:
+            continue
+
+        # Texture X coordinate (inline get_wall_texture_x)
+        if side == 1:  # E/W wall
+            wall_x = hit_y - int(hit_y)
+        else:  # N/S wall
+            wall_x = hit_x - int(hit_x)
+
+        if wall_dir == right or wall_dir == bottom:
+            wall_x = 1.0 - wall_x
+
+        tex_x_pixel = int32(wall_x * tex_size) % tex_size
+        if tex_x_pixel < 0:
+            tex_x_pixel += tex_size
+
+        # Shading
+        shade = 1.0 - (corrected_dist / 15.0)
+        if shade < 0.3:
+            shade = 0.3
+        elif shade > 1.0:
+            shade = 1.0
+        if side == 1:
+            shade *= 0.8
+
+        # Calculate texture mapping offset
+        tex_offset = (render_height - wall_height) / 2.0
+
+        # Draw each pixel in vertical slice
+        for y in range(draw_start, draw_end):
+            # Map screen Y to texture Y
+            tex_y = int32(((y - tex_offset) / wall_height) * tex_size)
+            if tex_y < 0:
+                tex_y = 0
+            elif tex_y >= tex_size:
+                tex_y = tex_size - 1
+
+            # Select texture and sample
+            if wall_dir == top or wall_dir == bottom:
+                r = tex_ns[tex_x_pixel, tex_y, 0]
+                g = tex_ns[tex_x_pixel, tex_y, 1]
+                b = tex_ns[tex_x_pixel, tex_y, 2]
+            else:
+                r = tex_ew[tex_x_pixel, tex_y, 0]
+                g = tex_ew[tex_x_pixel, tex_y, 1]
+                b = tex_ew[tex_x_pixel, tex_y, 2]
+
+            # Apply shading
+            r_shaded = int32(r * shade)
+            g_shaded = int32(g * shade)
+            b_shaded = int32(b * shade)
+
+            # Clamp
+            if r_shaded > 255:
+                r_shaded = 255
+            if g_shaded > 255:
+                g_shaded = 255
+            if b_shaded > 255:
+                b_shaded = 255
+
+            frame_buffer[x, y, 0] = r_shaded
+            frame_buffer[x, y, 1] = g_shaded
+            frame_buffer[x, y, 2] = b_shaded
 
 
 class Renderer3D:
@@ -43,6 +164,10 @@ class Renderer3D:
         # Pre-load textures as NumPy arrays
         self.wall_textures = self.texture_manager.get_wall_textures()
         self.wall_texture_arrays = self.texture_manager.get_wall_texture_arrays()
+
+        # Pre-convert texture arrays to contiguous uint8 for Numba
+        self._tex_ns = np.ascontiguousarray(self.wall_texture_arrays['ns'], dtype=np.uint8)
+        self._tex_ew = np.ascontiguousarray(self.wall_texture_arrays['ew'], dtype=np.uint8)
 
         # Ceiling and floor colors
         self.ceiling_color_top = np.array([30, 35, 45], dtype=np.uint8)
@@ -216,71 +341,20 @@ class Renderer3D:
         self.frame_buffer[:, half_h:] = self.floor_gradient
 
     def _draw_walls(self, player, walls, cols, rows):
-        """Draw walls using raycasting with NumPy optimization"""
+        """Draw walls using raycasting with Numba JIT optimization"""
         px, py = player.world_x, player.world_y
         angle = player.angle
 
-        # Cast all rays
+        # Cast all rays (returns numpy array)
         ray_results = self.raycaster.cast_all_rays(walls, cols, rows, px, py, angle)
 
-        # Get texture arrays
-        tex_ns = self.wall_texture_arrays['ns']
-        tex_ew = self.wall_texture_arrays['ew']
-        tex_size = self.texture_manager.texture_size
-
-        # Draw each vertical slice
-        for x, (dist, side, hit_x, hit_y, wall_dir, corrected_dist) in enumerate(ray_results):
-            if corrected_dist <= 0:
-                corrected_dist = 0.01
-
-            # Store in z-buffer
-            self.z_buffer[x] = corrected_dist
-
-            # Calculate wall height on screen
-            wall_height = int(self.render_height / corrected_dist)
-            if wall_height <= 0:
-                continue
-
-            # Calculate vertical position
-            draw_start = max(0, (self.render_height - wall_height) // 2)
-            draw_end = min(self.render_height, (self.render_height + wall_height) // 2)
-            draw_height = draw_end - draw_start
-
-            if draw_height <= 0:
-                continue
-
-            # Get texture X coordinate
-            tex_x = self.raycaster.get_wall_texture_x(hit_x, hit_y, side, wall_dir)
-            tex_x_pixel = int(tex_x * tex_size) % tex_size
-
-            # Select texture array based on wall direction
-            if wall_dir in (TOP, BOTTOM):
-                texture = tex_ns
-            else:
-                texture = tex_ew
-
-            # Calculate shading
-            shade = max(0.3, min(1.0, 1.0 - (corrected_dist / 15.0)))
-            if side == 1:
-                shade *= 0.8
-
-            # Get texture column and sample it
-            tex_column = texture[tex_x_pixel, :]
-
-            # Calculate texture Y indices for each screen pixel
-            tex_y_start = (draw_start - (self.render_height - wall_height) / 2) / wall_height * tex_size
-            tex_y_end = (draw_end - (self.render_height - wall_height) / 2) / wall_height * tex_size
-
-            # Create indices for texture sampling
-            tex_y_indices = np.linspace(tex_y_start, tex_y_end, draw_height).astype(np.int32)
-            tex_y_indices = np.clip(tex_y_indices, 0, tex_size - 1)
-
-            # Sample texture and apply shading
-            sampled = tex_column[tex_y_indices].astype(np.float32) * shade
-            sampled = np.clip(sampled, 0, 255).astype(np.uint8)
-
-            # Write to frame buffer
-            self.frame_buffer[x, draw_start:draw_end] = sampled
+        # Call Numba JIT function
+        _numba_draw_walls(
+            ray_results, self.frame_buffer,
+            self._tex_ns, self._tex_ew,
+            int32(self.render_height), int32(self.texture_manager.texture_size),
+            self.z_buffer
+        )
 
     def _draw_entities(self, screen, player, level, fog_manager):
         """Draw all entities as sprites using pre-rendered surfaces"""
