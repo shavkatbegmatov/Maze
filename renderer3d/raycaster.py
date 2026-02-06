@@ -9,6 +9,7 @@ import numpy as np
 import numba
 from numba import njit, float64, int32, int64
 from utils.constants import TOP, RIGHT, BOTTOM, LEFT
+from .blockmap import walls_to_blockmap, pos_to_blockmap, blockmap_cast_all_rays
 
 # Wall bit constants as module-level for Numba access
 _TOP = int32(TOP)
@@ -198,6 +199,10 @@ class Raycaster:
         self._walls_cache = None
         self._walls_id = None
 
+        # Blockmap cache
+        self._blockmap_cache = None
+        self._blockmap_walls_hash = None
+
     @staticmethod
     def _build_fisheye_table(num_rays, fov):
         """Build fish-eye correction table as numpy array"""
@@ -268,6 +273,42 @@ class Raycaster:
             return (w & direction) != 0
 
         return False
+
+    def _get_blockmap(self, walls, cols, rows):
+        """Blok xarita yaratish (kesh bilan)"""
+        walls_arr = self._get_walls_array(walls)
+        walls_hash = hash(walls_arr.data.tobytes())
+        if self._blockmap_walls_hash != walls_hash or self._blockmap_cache is None:
+            self._blockmap_cache = walls_to_blockmap(walls_arr, int32(cols), int32(rows))
+            self._blockmap_walls_hash = walls_hash
+        return self._blockmap_cache
+
+    def invalidate_blockmap(self):
+        """Blok xarita keshini tozalash"""
+        self._blockmap_cache = None
+        self._blockmap_walls_hash = None
+
+    def cast_all_rays_blockmap(self, walls, cols, rows, px, py, player_angle):
+        """
+        Blok xarita orqali nurlarni otish.
+        Devorlar qalin ko'rinadi — har bir devor segmenti to'liq katakcha.
+
+        Returns:
+            numpy array shape (num_rays, 6):
+            [dist, side, hit_x, hit_y, wall_dir, corrected_dist]
+        """
+        blockmap = self._get_blockmap(walls, cols, rows)
+        bm_h, bm_w = blockmap.shape
+
+        # O'yinchi pozitsiyasini blok xarita koordinatalariga o'tkazish
+        bpx, bpy = pos_to_blockmap(float64(px), float64(py))
+
+        return blockmap_cast_all_rays(
+            blockmap, int32(bm_w), int32(bm_h),
+            float64(bpx), float64(bpy), float64(player_angle),
+            float64(self.fov_rad), float64(self.half_fov_rad),
+            int32(self.num_rays), self._fish_eye_table
+        )
 
     @staticmethod
     def get_wall_texture_x(hit_x, hit_y, side, wall_dir):

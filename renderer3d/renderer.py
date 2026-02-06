@@ -346,7 +346,7 @@ class Renderer3D:
         angle = player.angle
 
         # Cast all rays (returns numpy array)
-        ray_results = self.raycaster.cast_all_rays(walls, cols, rows, px, py, angle)
+        ray_results = self.raycaster.cast_all_rays_blockmap(walls, cols, rows, px, py, angle)
 
         # Call Numba JIT function
         _numba_draw_walls(

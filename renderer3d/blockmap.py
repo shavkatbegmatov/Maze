@@ -1,0 +1,253 @@
+"""
+Block Map - Bitmask devorlarni solid blok xaritaga aylantirish
+Wolfenstein 3D yondashuvi: har bir devor segmenti to'liq katakchani egallaydi
+Natija: devorlar har qanday burchakdan qalinlik bilan ko'rinadi
+"""
+
+import math
+import numpy as np
+from numba import njit, int32, float64
+
+
+@njit(cache=True)
+def walls_to_blockmap(walls, cols, rows):
+    """
+    1D bitmask walls massivni 2D blok xaritaga aylantiradi.
+
+    Original labirint cols x rows.
+    Blok xarita (2*cols+1) x (2*rows+1):
+      - Burchaklar [2*cx, 2*cy]: har doim solid (ustun)
+      - Gorizontal devorlar [2*cx+1, 2*cy]: agar TOP/BOTTOM devor bo'lsa
+      - Vertikal devorlar [2*cx, 2*cy+1]: agar LEFT/RIGHT devor bo'lsa
+      - Ichki maydon [2*cx+1, 2*cy+1]: har doim bo'sh
+
+    Args:
+        walls: 1D int32 massiv (rows*cols), har bir hujayra uchun bitmask
+        cols: ustunlar soni
+        rows: qatorlar soni
+
+    Returns:
+        blockmap: 2D int32 massiv (bm_h, bm_w), 1=solid, 0=bo'sh
+    """
+    top = int32(1)
+    right = int32(2)
+    bottom = int32(4)
+    left = int32(8)
+
+    bm_w = 2 * cols + 1
+    bm_h = 2 * rows + 1
+    blockmap = np.zeros((bm_h, bm_w), dtype=np.int32)
+
+    # Har bir hujayra uchun devorlarni tekshirish
+    for cy in range(rows):
+        for cx in range(cols):
+            idx = cy * cols + cx
+            w = walls[idx]
+
+            # TOP devor -> gorizontal segment [2*cy, 2*cx+1]
+            if (w & top) != 0:
+                blockmap[2 * cy, 2 * cx + 1] = int32(1)
+
+            # BOTTOM devor -> gorizontal segment [2*(cy+1), 2*cx+1]
+            if (w & bottom) != 0:
+                blockmap[2 * (cy + 1), 2 * cx + 1] = int32(1)
+
+            # LEFT devor -> vertikal segment [2*cy+1, 2*cx]
+            if (w & left) != 0:
+                blockmap[2 * cy + 1, 2 * cx] = int32(1)
+
+            # RIGHT devor -> vertikal segment [2*cy+1, 2*(cx+1)]
+            if (w & right) != 0:
+                blockmap[2 * cy + 1, 2 * (cx + 1)] = int32(1)
+
+    # Burchak ustunlarini shartli solid qilish:
+    # faqat atrofidagi devor segmentlardan kamida bittasi solid bo'lsa
+    for cy in range(rows + 1):
+        for cx in range(cols + 1):
+            bx = 2 * cx
+            by = 2 * cy
+            has_neighbor = False
+            # Yuqori devor segmenti [by-1, bx]
+            if by > 0 and blockmap[by - 1, bx] > 0:
+                has_neighbor = True
+            # Pastki devor segmenti [by+1, bx]
+            if not has_neighbor and by < bm_h - 1 and blockmap[by + 1, bx] > 0:
+                has_neighbor = True
+            # Chap devor segmenti [by, bx-1]
+            if not has_neighbor and bx > 0 and blockmap[by, bx - 1] > 0:
+                has_neighbor = True
+            # O'ng devor segmenti [by, bx+1]
+            if not has_neighbor and bx < bm_w - 1 and blockmap[by, bx + 1] > 0:
+                has_neighbor = True
+            if has_neighbor:
+                blockmap[by, bx] = int32(1)
+
+    return blockmap
+
+
+@njit(cache=True)
+def pos_to_blockmap(wx, wy):
+    """
+    O'yinchi pozitsiyasini (world koordinata) blok xarita koordinatalariga o'tkazadi.
+
+    Formulasi: block_pos = 2 * world_pos
+    Sababi: blok xaritada ustunlar juft indekslarda (0,2,4,...) joylashgan
+    va ular world chegaralariga (0.0, 1.0, 2.0, ...) mos keladi.
+    Shuning uchun skalyatsiya aniq 2x.
+
+    Args:
+        wx, wy: world koordinatalari (float)
+
+    Returns:
+        bx, by: blok xarita koordinatalari (float)
+    """
+    bx = 2.0 * wx
+    by = 2.0 * wy
+    return bx, by
+
+
+@njit(cache=True)
+def blockmap_cast_all_rays(blockmap, bm_w, bm_h, bpx, bpy,
+                           player_angle, fov_rad, half_fov_rad,
+                           num_rays, fish_eye_table):
+    """
+    Blok xaritada DDA algoritmi bilan nurlarni otish.
+
+    Soddalashtirilgan: har bir blok solid yoki bo'sh.
+    Masofalarni /2.0 ga bo'lib qaytaradi (original world birliklariga).
+
+    Args:
+        blockmap: 2D int32 massiv (bm_h, bm_w)
+        bm_w, bm_h: blok xarita o'lchamlari
+        bpx, bpy: o'yinchi pozitsiyasi blok xarita koordinatalarida
+        player_angle: o'yinchining ko'rish burchagi (radyan)
+        fov_rad: ko'rish maydoni (radyan)
+        half_fov_rad: yarim ko'rish maydoni
+        num_rays: nur soni
+        fish_eye_table: baliq ko'zi korreksiyasi jadvali
+
+    Returns:
+        results: (num_rays, 6) massiv
+                 [dist, side, hit_x, hit_y, wall_dir, corrected_dist]
+                 Masofalar world birliklarida (/2.0)
+    """
+    results = np.empty((num_rays, 6), dtype=np.float64)
+
+    angle_step = fov_rad / num_rays
+    start_angle = player_angle - half_fov_rad
+
+    top = int32(1)
+    right = int32(2)
+    bottom = int32(4)
+    left = int32(8)
+
+    max_distance = 200.0  # blok xaritada 2x katta
+
+    for i in range(num_rays):
+        ray_angle = start_angle + i * angle_step
+
+        ray_dir_x = math.cos(ray_angle)
+        ray_dir_y = math.sin(ray_angle)
+
+        # Nolga bo'linishdan saqlanish
+        if abs(ray_dir_x) < 1e-10:
+            if ray_dir_x >= 0:
+                ray_dir_x = 1e-10
+            else:
+                ray_dir_x = -1e-10
+        if abs(ray_dir_y) < 1e-10:
+            if ray_dir_y >= 0:
+                ray_dir_y = 1e-10
+            else:
+                ray_dir_y = -1e-10
+
+        # Joriy hujayra
+        map_x = int32(int(bpx))
+        map_y = int32(int(bpy))
+
+        # Delta masofalar
+        delta_dist_x = abs(1.0 / ray_dir_x)
+        delta_dist_y = abs(1.0 / ray_dir_y)
+
+        # Qadam yo'nalishi
+        if ray_dir_x >= 0:
+            step_x = int32(1)
+            side_dist_x = (map_x + 1.0 - bpx) * delta_dist_x
+        else:
+            step_x = int32(-1)
+            side_dist_x = (bpx - map_x) * delta_dist_x
+
+        if ray_dir_y >= 0:
+            step_y = int32(1)
+            side_dist_y = (map_y + 1.0 - bpy) * delta_dist_y
+        else:
+            step_y = int32(-1)
+            side_dist_y = (bpy - map_y) * delta_dist_y
+
+        # DDA loop
+        hit = False
+        side = int32(0)
+        wall_dir = top
+
+        while not hit:
+            if side_dist_x < side_dist_y:
+                side_dist_x += delta_dist_x
+                map_x += step_x
+                side = int32(1)  # E/W devor
+                if step_x > 0:
+                    wall_dir = left
+                else:
+                    wall_dir = right
+            else:
+                side_dist_y += delta_dist_y
+                map_y += step_y
+                side = int32(0)  # N/S devor
+                if step_y > 0:
+                    wall_dir = top
+                else:
+                    wall_dir = bottom
+
+            # Chegaradan chiqish tekshiruvi
+            if map_x < 0 or map_x >= bm_w or map_y < 0 or map_y >= bm_h:
+                hit = True
+                break
+
+            # Solid blok tekshiruvi
+            if blockmap[map_y, map_x] > 0:
+                hit = True
+
+            # Maksimal masofa xavfsizligi
+            if side == 1:
+                dist_check = side_dist_x
+            else:
+                dist_check = side_dist_y
+            if dist_check > max_distance:
+                break
+
+        # Perpendicular masofa hisoblash
+        if side == 1:
+            perp_wall_dist = side_dist_x - delta_dist_x
+        else:
+            perp_wall_dist = side_dist_y - delta_dist_y
+
+        # Urilish nuqtasi (blok xarita koordinatalarida)
+        hit_x_bm = bpx + perp_wall_dist * ray_dir_x
+        hit_y_bm = bpy + perp_wall_dist * ray_dir_y
+
+        # Masofa world birliklariga qaytarish (/2.0)
+        world_dist = perp_wall_dist / 2.0
+
+        # Fish-eye korreksiyasi
+        corrected_dist = world_dist * fish_eye_table[i]
+
+        # hit koordinatalarini blok xaritada qoldiramiz
+        # chunki textura hisoblash hit - int(hit) bilan ishlaydi
+        # va blok xaritada har bir blok 1.0 kenglikda
+        results[i, 0] = world_dist
+        results[i, 1] = float64(side)
+        results[i, 2] = hit_x_bm
+        results[i, 3] = hit_y_bm
+        results[i, 4] = float64(wall_dir)
+        results[i, 5] = corrected_dist
+
+    return results
