@@ -8,7 +8,7 @@ import math
 import numpy as np
 from numba import njit, int32, float64
 
-WALL_HALF_THICKNESS = 0.1  # Har bir devor 0.2 world unit qalinlikda
+WALL_HALF_THICKNESS = 0.125  # Har bir devor 0.25 world unit qalinlikda
 
 
 @njit(cache=True)
@@ -147,6 +147,11 @@ def blockmap_cast_all_rays(blockmap, bm_w, bm_h, bpx, bpy, px, py,
     left = int32(8)
 
     max_distance = 200.0
+    # Burchak tekshiruv epsilonini devor qalinligiga moslashtiramiz.
+    corner_eps = WALL_HALF_THICKNESS + 0.01
+    if corner_eps > 0.49:
+        corner_eps = 0.49
+    corner_eps_hi = 1.0 - corner_eps
 
     for i in range(num_rays):
         ray_angle = start_angle + i * angle_step
@@ -245,7 +250,7 @@ def blockmap_cast_all_rays(blockmap, bm_w, bm_h, bpx, bpy, px, py,
                             if (walls[wy * cols + cell_x] & top) != 0:
                                 hit = True
                     # Epsilon: chegara yaqinida qo'shni hujayrani tekshirish
-                    if not hit and frac_x < 0.02 and cell_x - 1 >= 0:
+                    if not hit and frac_x < corner_eps and cell_x - 1 >= 0:
                         alt_cx = cell_x - 1
                         if 0 <= wy - 1 < rows:
                             if (walls[(wy - 1) * cols + alt_cx] & bottom) != 0:
@@ -253,7 +258,7 @@ def blockmap_cast_all_rays(blockmap, bm_w, bm_h, bpx, bpy, px, py,
                         if not hit and 0 <= wy < rows:
                             if (walls[wy * cols + alt_cx] & top) != 0:
                                 hit = True
-                    if not hit and frac_x > 0.98 and cell_x + 1 < cols:
+                    if not hit and frac_x > corner_eps_hi and cell_x + 1 < cols:
                         alt_cx = cell_x + 1
                         if 0 <= wy - 1 < rows:
                             if (walls[(wy - 1) * cols + alt_cx] & bottom) != 0:
@@ -278,7 +283,7 @@ def blockmap_cast_all_rays(blockmap, bm_w, bm_h, bpx, bpy, px, py,
                             if (walls[cell_y * cols + wx] & left) != 0:
                                 hit = True
                     # Epsilon: chegara yaqinida qo'shni hujayrani tekshirish
-                    if not hit and frac_y < 0.02 and cell_y - 1 >= 0:
+                    if not hit and frac_y < corner_eps and cell_y - 1 >= 0:
                         alt_cy = cell_y - 1
                         if 0 <= alt_cy < rows:
                             if 0 <= wx - 1 < cols:
@@ -287,7 +292,7 @@ def blockmap_cast_all_rays(blockmap, bm_w, bm_h, bpx, bpy, px, py,
                             if not hit and 0 <= wx < cols:
                                 if (walls[alt_cy * cols + wx] & left) != 0:
                                     hit = True
-                    if not hit and frac_y > 0.98 and cell_y + 1 < rows:
+                    if not hit and frac_y > corner_eps_hi and cell_y + 1 < rows:
                         alt_cy = cell_y + 1
                         if 0 <= alt_cy < rows:
                             if 0 <= wx - 1 < cols:
@@ -297,7 +302,7 @@ def blockmap_cast_all_rays(blockmap, bm_w, bm_h, bpx, bpy, px, py,
                                 if (walls[alt_cy * cols + wx] & left) != 0:
                                     hit = True
             else:
-                # Ustun (juft, juft) — yaqindagi devor segmentini tekshirish
+                # Ustun (juft, juft) - faqat mos devor segmenti bo'lsa urilsin.
                 if blockmap[map_y, map_x] > 0:
                     if side == 0:
                         wwy = map_y // 2
@@ -309,13 +314,12 @@ def blockmap_cast_all_rays(blockmap, bm_w, bm_h, bpx, bpy, px, py,
                         if 1 <= check_col < bm_w:
                             if blockmap[map_y, check_col] > 0:
                                 hit = True
-                        # Epsilon: chegara yaqinida qo'shni tekshirish
-                        if not hit and frac_x < 0.02:
+                        if not hit and frac_x < corner_eps:
                             alt_col = int32(2 * (cx_floor - 1) + 1)
                             if 1 <= alt_col < bm_w:
                                 if blockmap[map_y, alt_col] > 0:
                                     hit = True
-                        if not hit and frac_x > 0.98:
+                        if not hit and frac_x > corner_eps_hi:
                             alt_col = int32(2 * (cx_floor + 1) + 1)
                             if 1 <= alt_col < bm_w:
                                 if blockmap[map_y, alt_col] > 0:
@@ -330,12 +334,12 @@ def blockmap_cast_all_rays(blockmap, bm_w, bm_h, bpx, bpy, px, py,
                         if 1 <= check_row < bm_h:
                             if blockmap[check_row, map_x] > 0:
                                 hit = True
-                        if not hit and frac_y < 0.02:
+                        if not hit and frac_y < corner_eps:
                             alt_row = int32(2 * (cy_floor - 1) + 1)
                             if 1 <= alt_row < bm_h:
                                 if blockmap[alt_row, map_x] > 0:
                                     hit = True
-                        if not hit and frac_y > 0.98:
+                        if not hit and frac_y > corner_eps_hi:
                             alt_row = int32(2 * (cy_floor + 1) + 1)
                             if 1 <= alt_row < bm_h:
                                 if blockmap[alt_row, map_x] > 0:
@@ -350,7 +354,7 @@ def blockmap_cast_all_rays(blockmap, bm_w, bm_h, bpx, bpy, px, py,
                 break
 
         # World masofa hisoblash (blockmap DDA natijasi) + qalinlik offset
-        wht = 0.1  # WALL_HALF_THICKNESS (numba njit ichida konstanta sifatida)
+        wht = WALL_HALF_THICKNESS
         if side == 1:
             if step_x > 0:
                 wall_world_x = map_x // 2
