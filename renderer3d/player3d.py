@@ -58,6 +58,10 @@ class Player3D:
         self.head_tilt = 0
         self.max_tilt = 0.05  # Maximum tilt angle
 
+        # Vertical look (pitch)
+        self.pitch = 0.0  # Vertical look offset (-1.0 to 1.0, 0 = horizontal)
+        self.max_pitch = 0.6  # Maximum pitch limit
+
     @property
     def x(self):
         """Grid X position (for compatibility with 2D player)"""
@@ -277,14 +281,20 @@ class Player3D:
         while self.angle >= 2 * math.pi:
             self.angle -= 2 * math.pi
 
-    def handle_mouse_look(self, mouse_dx):
+    def handle_mouse_look(self, mouse_dx, mouse_dy=0):
         """
-        Handle mouse look rotation
+        Handle mouse look rotation and pitch
 
         Args:
             mouse_dx: Mouse X movement in pixels
+            mouse_dy: Mouse Y movement in pixels
         """
         self.rotate(mouse_dx * self.mouse_sensitivity)
+        self.pitch -= mouse_dy * self.mouse_sensitivity
+        if self.pitch > self.max_pitch:
+            self.pitch = self.max_pitch
+        elif self.pitch < -self.max_pitch:
+            self.pitch = -self.max_pitch
 
     def handle_keyboard_turn(self, turn_input, dt):
         """

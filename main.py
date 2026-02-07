@@ -366,9 +366,9 @@ class MazeGame:
     def _handle_3d_mouse_motion(self, event):
         """Handle mouse motion for 3D look"""
         if self.player_3d and self.mouse_grabbed:
-            # Get relative mouse movement
             rel_x = event.rel[0]
-            self.player_3d.handle_mouse_look(rel_x)
+            rel_y = event.rel[1]
+            self.player_3d.handle_mouse_look(rel_x, rel_y)
 
     def _grab_mouse(self):
         """Grab mouse for 3D mode"""
