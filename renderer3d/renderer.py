@@ -54,8 +54,9 @@ def _numba_draw_walls(ray_results, frame_buffer, tex_ns, tex_ew,
         wall_dir = int32(ray_results[x, 4])
         corrected_dist = ray_results[x, 5]
 
-        if corrected_dist <= 0.0:
-            corrected_dist = 0.01
+        # Near clipping plane to prevent visual artifacts
+        if corrected_dist < 0.1:
+            corrected_dist = 0.1
 
         # Store in z-buffer
         z_buffer[x] = corrected_dist
@@ -86,9 +87,19 @@ def _numba_draw_walls(ray_results, frame_buffer, tex_ns, tex_ew,
         if wall_dir == right or wall_dir == bottom:
             wall_x = 1.0 - wall_x
 
-        tex_x_pixel = int32(wall_x * tex_size) % tex_size
-        if tex_x_pixel < 0:
-            tex_x_pixel += tex_size
+        # Ensure wall_x is strictly within [0, 1] to prevent texture bleeding
+        if wall_x < 0.0:
+            wall_x = 0.0
+        elif wall_x >= 1.0:
+            wall_x = 0.9999
+
+        tex_x_pixel = int32(wall_x * tex_size)
+        
+        # Safety clamp (redundant with the check above but safe for float precision)
+        if tex_x_pixel >= tex_size:
+            tex_x_pixel = tex_size - 1
+        elif tex_x_pixel < 0:
+            tex_x_pixel = 0
 
         # Shading
         shade = 1.0 - (corrected_dist / 15.0)
@@ -139,6 +150,114 @@ def _numba_draw_walls(ray_results, frame_buffer, tex_ns, tex_ew,
             frame_buffer[x, y, 2] = b_shaded
 
 
+@njit(cache=True)
+def _numba_draw_floor_ceiling(frame_buffer, render_height, num_rays,
+                               px, py, player_angle, half_fov):
+    """
+    Draw perspective floor and ceiling with checkerboard pattern (Numba JIT)
+    """
+    half_h = render_height // 2
+
+    # Ray direction at left edge and right edge of screen
+    angle_left = player_angle - half_fov
+    angle_right = player_angle + half_fov
+
+    dir_lx = math.cos(angle_left)
+    dir_ly = math.sin(angle_left)
+    dir_rx = math.cos(angle_right)
+    dir_ry = math.sin(angle_right)
+
+    # Floor colors (checkerboard)
+    floor_r1, floor_g1, floor_b1 = 55, 50, 45
+    floor_r2, floor_g2, floor_b2 = 35, 32, 28
+
+    # Ceiling colors (checkerboard)
+    ceil_r1, ceil_g1, ceil_b1 = 35, 40, 55
+    ceil_r2, ceil_g2, ceil_b2 = 25, 30, 42
+
+    for y in range(render_height):
+        is_floor = y > half_h
+        if y == half_h:
+            # Horizon line — skip or draw dark
+            for x in range(num_rays):
+                frame_buffer[x, y, 0] = 20
+                frame_buffer[x, y, 1] = 20
+                frame_buffer[x, y, 2] = 25
+            continue
+
+        # Row distance (perspective projection)
+        if is_floor:
+            p = y - half_h
+        else:
+            p = half_h - y
+
+        if p <= 0:
+            continue
+
+        row_dist = float(half_h) / float(p)
+
+        # Floor step — world coordinates at left and right edges for this row
+        floor_step_x = row_dist * (dir_rx - dir_lx) / float(num_rays)
+        floor_step_y = row_dist * (dir_ry - dir_ly) / float(num_rays)
+
+        # Starting world position (left edge of screen)
+        floor_x = px + row_dist * dir_lx
+        floor_y = py + row_dist * dir_ly
+
+        # Distance shading
+        shade = 1.0 - row_dist / 12.0
+        if shade < 0.15:
+            shade = 0.15
+        elif shade > 1.0:
+            shade = 1.0
+
+        for x in range(num_rays):
+            # Checkerboard pattern
+            fx = int(math.floor(floor_x))
+            fy = int(math.floor(floor_y))
+            checker = (fx + fy) & 1
+
+            if is_floor:
+                if checker:
+                    r = int(floor_r1 * shade)
+                    g = int(floor_g1 * shade)
+                    b = int(floor_b1 * shade)
+                else:
+                    r = int(floor_r2 * shade)
+                    g = int(floor_g2 * shade)
+                    b = int(floor_b2 * shade)
+            else:
+                if checker:
+                    r = int(ceil_r1 * shade)
+                    g = int(ceil_g1 * shade)
+                    b = int(ceil_b1 * shade)
+                else:
+                    r = int(ceil_r2 * shade)
+                    g = int(ceil_g2 * shade)
+                    b = int(ceil_b2 * shade)
+
+            # Clamp
+            if r > 255:
+                r = 255
+            elif r < 0:
+                r = 0
+            if g > 255:
+                g = 255
+            elif g < 0:
+                g = 0
+            if b > 255:
+                b = 255
+            elif b < 0:
+                b = 0
+
+            frame_buffer[x, y, 0] = r
+            frame_buffer[x, y, 1] = g
+            frame_buffer[x, y, 2] = b
+
+            floor_x += floor_step_x
+            floor_y += floor_step_y
+
+
 class Renderer3D:
     """
     Optimized 3D renderer using NumPy frame buffer and surfarray
@@ -169,17 +288,8 @@ class Renderer3D:
         self._tex_ns = np.ascontiguousarray(self.wall_texture_arrays['ns'], dtype=np.uint8)
         self._tex_ew = np.ascontiguousarray(self.wall_texture_arrays['ew'], dtype=np.uint8)
 
-        # Ceiling and floor colors
-        self.ceiling_color_top = np.array([30, 35, 45], dtype=np.uint8)
-        self.ceiling_color_bottom = np.array([50, 55, 65], dtype=np.uint8)
-        self.floor_color_top = np.array([40, 35, 30], dtype=np.uint8)
-        self.floor_color_bottom = np.array([20, 18, 15], dtype=np.uint8)
-
         # Frame buffer - RGB array (width, height, 3)
         self.frame_buffer = np.zeros((screen_width, screen_height, 3), dtype=np.uint8)
-
-        # Pre-compute gradients
-        self._init_gradients()
 
         # Z-buffer for sprite sorting
         self.z_buffer = np.full(screen_width, float('inf'), dtype=np.float32)
@@ -187,27 +297,6 @@ class Renderer3D:
         # Pre-rendered sprite surfaces
         self._sprite_cache = {}
         self._init_sprite_surfaces()
-
-    def _init_gradients(self):
-        """Pre-compute ceiling and floor gradients"""
-        half_h = self.render_height // 2
-
-        # Ceiling gradient (top to middle)
-        if half_h > 0:
-            t = np.linspace(0, 1, half_h).reshape(-1, 1)
-            self.ceiling_gradient = (
-                self.ceiling_color_top + t * (self.ceiling_color_bottom - self.ceiling_color_top)
-            ).astype(np.uint8)
-
-            # Floor gradient (middle to bottom)
-            floor_h = self.render_height - half_h
-            t = np.linspace(0, 1, floor_h).reshape(-1, 1)
-            self.floor_gradient = (
-                self.floor_color_top + t * (self.floor_color_bottom - self.floor_color_top)
-            ).astype(np.uint8)
-        else:
-            self.ceiling_gradient = np.array([[30, 35, 45]], dtype=np.uint8)
-            self.floor_gradient = np.array([[20, 18, 15]], dtype=np.uint8)
 
     def _init_sprite_surfaces(self):
         """Pre-render sprite surfaces for fast blitting"""
@@ -290,10 +379,9 @@ class Renderer3D:
         self.render_height = height
         self.raycaster.set_resolution(width)
 
-        # Reinitialize frame buffer and gradients
+        # Reinitialize frame buffer
         self.frame_buffer = np.zeros((width, height, 3), dtype=np.uint8)
         self.z_buffer = np.full(width, float('inf'), dtype=np.float32)
-        self._init_gradients()
 
     def render(self, screen, player, level, fog_manager=None):
         """
@@ -309,7 +397,7 @@ class Renderer3D:
         self.z_buffer.fill(float('inf'))
 
         # 1. Draw ceiling and floor to frame buffer
-        self._draw_ceiling_floor()
+        self._draw_ceiling_floor(player)
 
         # 2. Cast rays and draw walls to frame buffer
         self._draw_walls(player, level.walls, level.cols, level.rows)
@@ -330,15 +418,15 @@ class Renderer3D:
         # 4. Draw entities (sprites) directly to screen
         self._draw_entities(screen, player, level, fog_manager)
 
-    def _draw_ceiling_floor(self):
-        """Draw gradient ceiling and floor to frame buffer"""
-        half_h = self.render_height // 2
-
-        # Apply ceiling gradient to all columns
-        self.frame_buffer[:, :half_h] = self.ceiling_gradient
-
-        # Apply floor gradient to all columns
-        self.frame_buffer[:, half_h:] = self.floor_gradient
+    def _draw_ceiling_floor(self, player):
+        """Draw perspective floor and ceiling with checkerboard pattern"""
+        px, py = player.world_x, player.world_y
+        angle = player.angle
+        half_fov = self.raycaster.half_fov_rad
+        _numba_draw_floor_ceiling(
+            self.frame_buffer, self.render_height, self.screen_width,
+            px, py, angle, half_fov
+        )
 
     def _draw_walls(self, player, walls, cols, rows):
         """Draw walls using raycasting with Numba JIT optimization"""
