@@ -303,13 +303,15 @@ class Raycaster:
         # O'yinchi pozitsiyasini blok xarita koordinatalariga o'tkazish
         bpx, bpy = pos_to_blockmap(float64(px), float64(py))
 
+        walls_arr = self._get_walls_array(walls)
         return blockmap_cast_all_rays(
             blockmap, int32(bm_w), int32(bm_h),
             float64(bpx), float64(bpy),
             float64(px), float64(py),
             float64(player_angle),
             float64(self.fov_rad), float64(self.half_fov_rad),
-            int32(self.num_rays), self._fish_eye_table
+            int32(self.num_rays), self._fish_eye_table,
+            walls_arr, int32(cols), int32(rows)
         )
 
     @staticmethod

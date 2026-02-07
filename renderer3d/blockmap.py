@@ -108,12 +108,14 @@ def pos_to_blockmap(wx, wy):
 @njit(cache=True)
 def blockmap_cast_all_rays(blockmap, bm_w, bm_h, bpx, bpy, px, py,
                            player_angle, fov_rad, half_fov_rad,
-                           num_rays, fish_eye_table):
+                           num_rays, fish_eye_table,
+                           walls, cols, rows):
     """
     Blok xaritada DDA algoritmi bilan nurlarni otish.
 
-    DDA blockmap koordinatalarida ishlaydi (hit detection uchun).
-    Masofalar world koordinatalarida hisoblanadi (map_x/2 formulasi bilan).
+    Ikki bosqichli yondashuv:
+    1. Blockmap DDA — yo'nalish filtri bilan (devorlar qalinligi uchun)
+    2. Bitmask korreksiya — blockmap o'tkazib yuborgan yaqin devorlarni topish
 
     Args:
         blockmap: 2D int32 massiv (bm_h, bm_w)
@@ -125,6 +127,8 @@ def blockmap_cast_all_rays(blockmap, bm_w, bm_h, bpx, bpy, px, py,
         half_fov_rad: yarim ko'rish maydoni
         num_rays: nur soni
         fish_eye_table: baliq ko'zi korreksiyasi jadvali
+        walls: 1D int32 massiv — original bitmask devorlar
+        cols, rows: labirint o'lchamlari
 
     Returns:
         results: (num_rays, 6) massiv
@@ -183,7 +187,9 @@ def blockmap_cast_all_rays(blockmap, bm_w, bm_h, bpx, bpy, px, py,
             step_y = int32(-1)
             side_dist_y = (bpy - map_y) * delta_dist_y
 
-        # DDA loop — blockmap da hit detection
+        # ============================================================
+        # BLOCKMAP DDA — yo'nalish filtri bilan
+        # ============================================================
         hit = False
         side = int32(0)
         wall_dir = top
@@ -192,7 +198,7 @@ def blockmap_cast_all_rays(blockmap, bm_w, bm_h, bpx, bpy, px, py,
             if side_dist_x < side_dist_y:
                 side_dist_x += delta_dist_x
                 map_x += step_x
-                side = int32(1)  # E/W devor
+                side = int32(1)
                 if step_x > 0:
                     wall_dir = left
                 else:
@@ -200,22 +206,61 @@ def blockmap_cast_all_rays(blockmap, bm_w, bm_h, bpx, bpy, px, py,
             else:
                 side_dist_y += delta_dist_y
                 map_y += step_y
-                side = int32(0)  # N/S devor
+                side = int32(0)
                 if step_y > 0:
                     wall_dir = top
                 else:
                     wall_dir = bottom
 
-            # Chegaradan chiqish tekshiruvi
+            # Chegaradan chiqish
             if map_x < 0 or map_x >= bm_w or map_y < 0 or map_y >= bm_h:
                 hit = True
                 break
 
-            # Solid blok tekshiruvi
-            if blockmap[map_y, map_x] > 0:
-                hit = True
+            # Yo'nalish filtri bilan solid tekshiruvi
+            even_row = (map_y % 2 == 0)
+            even_col = (map_x % 2 == 0)
 
-            # Maksimal masofa xavfsizligi
+            if not even_row and not even_col:
+                # Ichki (toq, toq) — doim tekshirish
+                if blockmap[map_y, map_x] > 0:
+                    hit = True
+            elif even_row and not even_col:
+                # Gorizontal devor — faqat Y qadami
+                if side == 0 and blockmap[map_y, map_x] > 0:
+                    hit = True
+            elif not even_row and even_col:
+                # Vertikal devor — faqat X qadami
+                if side == 1 and blockmap[map_y, map_x] > 0:
+                    hit = True
+            else:
+                # Ustun (juft, juft) — yaqindagi devor segmentini tekshirish
+                if side == 0:
+                    if step_y > 0:
+                        wwy = map_y // 2
+                    else:
+                        wwy = (map_y + 1) // 2
+                    t_y = (wwy - py) / ray_dir_y
+                    cwx = px + t_y * ray_dir_x
+                    cx_floor = int32(int(math.floor(cwx)))
+                    check_col = int32(2 * cx_floor + 1)
+                    if 1 <= check_col < bm_w:
+                        if blockmap[map_y, check_col] > 0:
+                            hit = True
+                elif side == 1:
+                    if step_x > 0:
+                        wwx = map_x // 2
+                    else:
+                        wwx = (map_x + 1) // 2
+                    t_x = (wwx - px) / ray_dir_x
+                    cwy = py + t_x * ray_dir_y
+                    cy_floor = int32(int(math.floor(cwy)))
+                    check_row = int32(2 * cy_floor + 1)
+                    if 1 <= check_row < bm_h:
+                        if blockmap[check_row, map_x] > 0:
+                            hit = True
+
+            # Maksimal masofa
             if side == 1:
                 dist_check = side_dist_x
             else:
@@ -223,22 +268,121 @@ def blockmap_cast_all_rays(blockmap, bm_w, bm_h, bpx, bpy, px, py,
             if dist_check > max_distance:
                 break
 
-        # World perpendicular masofa hisoblash
-        # Blockmap -> world: step yo'nalishiga qarab hit yuzining world pozitsiyasi
-        # Juft col/row (devor/ustun): c//2 va (c+1)//2 bir xil (butun son)
-        # Toq col/row (ichki hujayra): chap yuz = c//2, o'ng yuz = (c+1)//2
+        # World masofa hisoblash (blockmap DDA natijasi)
         if side == 1:
             if step_x > 0:
-                wall_world_x = map_x // 2  # chap yuzga kirish
+                wall_world_x = map_x // 2
             else:
-                wall_world_x = (map_x + 1) // 2  # o'ng yuzga kirish
+                wall_world_x = (map_x + 1) // 2
             perp_wall_dist = (wall_world_x - px) / ray_dir_x
         else:
             if step_y > 0:
-                wall_world_y = map_y // 2  # yuqori yuzga kirish
+                wall_world_y = map_y // 2
             else:
-                wall_world_y = (map_y + 1) // 2  # pastki yuzga kirish
+                wall_world_y = (map_y + 1) // 2
             perp_wall_dist = (wall_world_y - py) / ray_dir_y
+
+        if perp_wall_dist < 0.001:
+            perp_wall_dist = 0.001
+
+        # ============================================================
+        # BITMASK KORREKSIYA — o'tkazib yuborilgan yaqin devorlarni topish
+        # Blockmap DDA non-linear mapping tufayli ba'zi devorlarni
+        # o'tkazib yuborishi mumkin. Original bitmask orqali tekshirish.
+        # ============================================================
+        bm_hit_x = px + perp_wall_dist * ray_dir_x
+        bm_hit_y = py + perp_wall_dist * ray_dir_y
+
+        # X yo'nalishida yaqinroq vertikal devor bormi?
+        if ray_dir_x > 0:
+            cx_start = int32(int(px)) + 1
+            cx_end = int32(int(bm_hit_x)) + 1
+            for cx in range(cx_start, cx_end):
+                # Bu chegarada devor bormi?
+                cell_left = int32(cx - 1)
+                t_cross = (cx - px) / ray_dir_x
+                cross_y = py + t_cross * ray_dir_y
+                cell_y = int32(int(math.floor(cross_y)))
+                if cell_y < 0:
+                    cell_y = int32(0)
+                if cell_y >= rows:
+                    cell_y = int32(rows - 1)
+                # Chap hujayraning RIGHT devori
+                if 0 <= cell_left < cols:
+                    idx = cell_y * cols + cell_left
+                    if 0 <= idx < walls.shape[0]:
+                        if (walls[idx] & right) != 0:
+                            if t_cross < perp_wall_dist - 0.0001:
+                                perp_wall_dist = t_cross
+                                side = int32(1)
+                                wall_dir = left
+                                break
+        else:
+            cx_start = int32(int(px))
+            cx_end = int32(int(math.floor(bm_hit_x)))
+            for cx in range(cx_start, cx_end, -1):
+                cell_right = int32(cx)
+                t_cross = (cx - px) / ray_dir_x
+                cross_y = py + t_cross * ray_dir_y
+                cell_y = int32(int(math.floor(cross_y)))
+                if cell_y < 0:
+                    cell_y = int32(0)
+                if cell_y >= rows:
+                    cell_y = int32(rows - 1)
+                # O'ng hujayraning LEFT devori
+                if 0 <= cell_right < cols:
+                    idx = cell_y * cols + cell_right
+                    if 0 <= idx < walls.shape[0]:
+                        if (walls[idx] & left) != 0:
+                            if t_cross < perp_wall_dist - 0.0001:
+                                perp_wall_dist = t_cross
+                                side = int32(1)
+                                wall_dir = right
+                                break
+
+        # Y yo'nalishida yaqinroq gorizontal devor bormi?
+        if ray_dir_y > 0:
+            cy_start = int32(int(py)) + 1
+            cy_end = int32(int(bm_hit_y)) + 1
+            for cy in range(cy_start, cy_end):
+                cell_above = int32(cy - 1)
+                t_cross = (cy - py) / ray_dir_y
+                cross_x = px + t_cross * ray_dir_x
+                cell_x = int32(int(math.floor(cross_x)))
+                if cell_x < 0:
+                    cell_x = int32(0)
+                if cell_x >= cols:
+                    cell_x = int32(cols - 1)
+                if 0 <= cell_above < rows:
+                    idx = cell_above * cols + cell_x
+                    if 0 <= idx < walls.shape[0]:
+                        if (walls[idx] & bottom) != 0:
+                            if t_cross < perp_wall_dist - 0.0001:
+                                perp_wall_dist = t_cross
+                                side = int32(0)
+                                wall_dir = top
+                                break
+        else:
+            cy_start = int32(int(py))
+            cy_end = int32(int(math.floor(bm_hit_y)))
+            for cy in range(cy_start, cy_end, -1):
+                cell_below = int32(cy)
+                t_cross = (cy - py) / ray_dir_y
+                cross_x = px + t_cross * ray_dir_x
+                cell_x = int32(int(math.floor(cross_x)))
+                if cell_x < 0:
+                    cell_x = int32(0)
+                if cell_x >= cols:
+                    cell_x = int32(cols - 1)
+                if 0 <= cell_below < rows:
+                    idx = cell_below * cols + cell_x
+                    if 0 <= idx < walls.shape[0]:
+                        if (walls[idx] & top) != 0:
+                            if t_cross < perp_wall_dist - 0.0001:
+                                perp_wall_dist = t_cross
+                                side = int32(0)
+                                wall_dir = bottom
+                                break
 
         if perp_wall_dist < 0.001:
             perp_wall_dist = 0.001
