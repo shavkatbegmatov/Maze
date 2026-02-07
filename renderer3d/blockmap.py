@@ -8,6 +8,8 @@ import math
 import numpy as np
 from numba import njit, int32, float64
 
+WALL_HALF_THICKNESS = 0.1  # Har bir devor 0.2 world unit qalinlikda
+
 
 @njit(cache=True)
 def walls_to_blockmap(walls, cols, rows):
@@ -226,39 +228,76 @@ def blockmap_cast_all_rays(blockmap, bm_w, bm_h, bpx, bpy, px, py,
                 if blockmap[map_y, map_x] > 0:
                     hit = True
             elif even_row and not even_col:
-                # Gorizontal devor — faqat Y qadami
+                # Gorizontal devor — faqat Y qadami + world hujayra validatsiyasi
                 if side == 0 and blockmap[map_y, map_x] > 0:
-                    hit = True
-            elif not even_row and even_col:
-                # Vertikal devor — faqat X qadami
-                if side == 1 and blockmap[map_y, map_x] > 0:
-                    hit = True
-            else:
-                # Ustun (juft, juft) — yaqindagi devor segmentini tekshirish
-                if side == 0:
+                    # Nurning world pozitsiyasini hisoblash
                     if step_y > 0:
                         wwy = map_y // 2
                     else:
                         wwy = (map_y + 1) // 2
                     t_y = (wwy - py) / ray_dir_y
-                    cwx = px + t_y * ray_dir_x
-                    cx_floor = int32(int(math.floor(cwx)))
-                    check_col = int32(2 * cx_floor + 1)
-                    if 1 <= check_col < bm_w:
-                        if blockmap[map_y, check_col] > 0:
-                            hit = True
-                elif side == 1:
+                    world_x_at_cross = px + t_y * ray_dir_x
+                    expected_bm_col = int32(2 * int32(int(math.floor(world_x_at_cross))) + 1)
+                    if expected_bm_col == map_x:
+                        hit = True
+                    # Aks holda — noto'g'ri hujayra, o'tkazib yuborish
+            elif not even_row and even_col:
+                # Vertikal devor — faqat X qadami + world hujayra validatsiyasi
+                if side == 1 and blockmap[map_y, map_x] > 0:
+                    # Nurning world pozitsiyasini hisoblash
                     if step_x > 0:
                         wwx = map_x // 2
                     else:
                         wwx = (map_x + 1) // 2
                     t_x = (wwx - px) / ray_dir_x
-                    cwy = py + t_x * ray_dir_y
-                    cy_floor = int32(int(math.floor(cwy)))
-                    check_row = int32(2 * cy_floor + 1)
-                    if 1 <= check_row < bm_h:
-                        if blockmap[check_row, map_x] > 0:
+                    world_y_at_cross = py + t_x * ray_dir_y
+                    expected_bm_row = int32(2 * int32(int(math.floor(world_y_at_cross))) + 1)
+                    if expected_bm_row == map_y:
+                        hit = True
+                    # Aks holda — noto'g'ri hujayra, o'tkazib yuborish
+            else:
+                # Ustun (juft, juft) — mini-blok sifatida tekshirish
+                pillar_cx = map_x // 2
+                pillar_cy = map_y // 2
+                if blockmap[map_y, map_x] > 0:
+                    if side == 0:
+                        # Y qadami — ustunning Y yuziga urildi
+                        if step_y > 0:
+                            pillar_face_y = pillar_cy - 0.1  # wht
+                        else:
+                            pillar_face_y = pillar_cy + 0.1
+                        t_pillar = (pillar_face_y - py) / ray_dir_y
+                        pillar_hit_x = px + t_pillar * ray_dir_x
+                        # Ustun X chegarasi ichida ekanligini tekshirish
+                        if pillar_cx - 0.1 <= pillar_hit_x <= pillar_cx + 0.1:
                             hit = True
+                        else:
+                            # Yonidagi devor segmentini tekshirish
+                            cwx = px + t_pillar * ray_dir_x
+                            cx_floor = int32(int(math.floor(cwx)))
+                            check_col = int32(2 * cx_floor + 1)
+                            if 1 <= check_col < bm_w:
+                                if blockmap[map_y, check_col] > 0:
+                                    hit = True
+                    elif side == 1:
+                        # X qadami — ustunning X yuziga urildi
+                        if step_x > 0:
+                            pillar_face_x = pillar_cx - 0.1  # wht
+                        else:
+                            pillar_face_x = pillar_cx + 0.1
+                        t_pillar = (pillar_face_x - px) / ray_dir_x
+                        pillar_hit_y = py + t_pillar * ray_dir_y
+                        # Ustun Y chegarasi ichida ekanligini tekshirish
+                        if pillar_cy - 0.1 <= pillar_hit_y <= pillar_cy + 0.1:
+                            hit = True
+                        else:
+                            # Yonidagi devor segmentini tekshirish
+                            cwy = py + t_pillar * ray_dir_y
+                            cy_floor = int32(int(math.floor(cwy)))
+                            check_row = int32(2 * cy_floor + 1)
+                            if 1 <= check_row < bm_h:
+                                if blockmap[check_row, map_x] > 0:
+                                    hit = True
 
             # Maksimal masofa
             if side == 1:
@@ -268,19 +307,36 @@ def blockmap_cast_all_rays(blockmap, bm_w, bm_h, bpx, bpy, px, py,
             if dist_check > max_distance:
                 break
 
-        # World masofa hisoblash (blockmap DDA natijasi)
+        # World masofa hisoblash (blockmap DDA natijasi) + qalinlik offset
+        wht = 0.1  # WALL_HALF_THICKNESS (numba njit ichida konstanta sifatida)
         if side == 1:
             if step_x > 0:
                 wall_world_x = map_x // 2
             else:
                 wall_world_x = (map_x + 1) // 2
-            perp_wall_dist = (wall_world_x - px) / ray_dir_x
+            # Devor hujayrasi (even col) uchun qalinlik offset
+            if map_x % 2 == 0:
+                if step_x > 0:
+                    wall_face_x = wall_world_x - wht
+                else:
+                    wall_face_x = wall_world_x + wht
+            else:
+                wall_face_x = wall_world_x
+            perp_wall_dist = (wall_face_x - px) / ray_dir_x
         else:
             if step_y > 0:
                 wall_world_y = map_y // 2
             else:
                 wall_world_y = (map_y + 1) // 2
-            perp_wall_dist = (wall_world_y - py) / ray_dir_y
+            # Devor hujayrasi (even row) uchun qalinlik offset
+            if map_y % 2 == 0:
+                if step_y > 0:
+                    wall_face_y = wall_world_y - wht
+                else:
+                    wall_face_y = wall_world_y + wht
+            else:
+                wall_face_y = wall_world_y
+            perp_wall_dist = (wall_face_y - py) / ray_dir_y
 
         if perp_wall_dist < 0.001:
             perp_wall_dist = 0.001
@@ -300,7 +356,7 @@ def blockmap_cast_all_rays(blockmap, bm_w, bm_h, bpx, bpy, px, py,
             for cx in range(cx_start, cx_end):
                 # Bu chegarada devor bormi?
                 cell_left = int32(cx - 1)
-                t_cross = (cx - px) / ray_dir_x
+                t_cross = (cx - wht - px) / ray_dir_x  # qalinlik offset
                 cross_y = py + t_cross * ray_dir_y
                 cell_y = int32(int(math.floor(cross_y)))
                 if cell_y < 0:
@@ -322,7 +378,7 @@ def blockmap_cast_all_rays(blockmap, bm_w, bm_h, bpx, bpy, px, py,
             cx_end = int32(int(math.floor(bm_hit_x)))
             for cx in range(cx_start, cx_end, -1):
                 cell_right = int32(cx)
-                t_cross = (cx - px) / ray_dir_x
+                t_cross = (cx + wht - px) / ray_dir_x  # qalinlik offset
                 cross_y = py + t_cross * ray_dir_y
                 cell_y = int32(int(math.floor(cross_y)))
                 if cell_y < 0:
@@ -346,7 +402,7 @@ def blockmap_cast_all_rays(blockmap, bm_w, bm_h, bpx, bpy, px, py,
             cy_end = int32(int(bm_hit_y)) + 1
             for cy in range(cy_start, cy_end):
                 cell_above = int32(cy - 1)
-                t_cross = (cy - py) / ray_dir_y
+                t_cross = (cy - wht - py) / ray_dir_y  # qalinlik offset
                 cross_x = px + t_cross * ray_dir_x
                 cell_x = int32(int(math.floor(cross_x)))
                 if cell_x < 0:
@@ -367,7 +423,7 @@ def blockmap_cast_all_rays(blockmap, bm_w, bm_h, bpx, bpy, px, py,
             cy_end = int32(int(math.floor(bm_hit_y)))
             for cy in range(cy_start, cy_end, -1):
                 cell_below = int32(cy)
-                t_cross = (cy - py) / ray_dir_y
+                t_cross = (cy + wht - py) / ray_dir_y  # qalinlik offset
                 cross_x = px + t_cross * ray_dir_x
                 cell_x = int32(int(math.floor(cross_x)))
                 if cell_x < 0:
