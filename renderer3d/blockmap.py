@@ -224,12 +224,20 @@ def blockmap_cast_all_rays(blockmap, bm_w, bm_h, bpx, bpy, px, py,
                 break
 
         # World perpendicular masofa hisoblash
-        # Juft ustun/qator = devor/ustun, world chegarasi = index / 2
+        # Blockmap -> world: step yo'nalishiga qarab hit yuzining world pozitsiyasi
+        # Juft col/row (devor/ustun): c//2 va (c+1)//2 bir xil (butun son)
+        # Toq col/row (ichki hujayra): chap yuz = c//2, o'ng yuz = (c+1)//2
         if side == 1:
-            wall_world_x = map_x / 2.0
+            if step_x > 0:
+                wall_world_x = map_x // 2  # chap yuzga kirish
+            else:
+                wall_world_x = (map_x + 1) // 2  # o'ng yuzga kirish
             perp_wall_dist = (wall_world_x - px) / ray_dir_x
         else:
-            wall_world_y = map_y / 2.0
+            if step_y > 0:
+                wall_world_y = map_y // 2  # yuqori yuzga kirish
+            else:
+                wall_world_y = (map_y + 1) // 2  # pastki yuzga kirish
             perp_wall_dist = (wall_world_y - py) / ray_dir_y
 
         if perp_wall_dist < 0.001:
