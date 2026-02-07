@@ -60,7 +60,7 @@ class Player3D:
 
         # Vertical look (pitch)
         self.pitch = 0.0  # Vertical look offset (-1.0 to 1.0, 0 = horizontal)
-        self.max_pitch = 0.0  # 0 = cheklovsiz (erkin yuqoriga/pastga qarash)
+        self.max_pitch = 0.8  # Prevent extreme pitch angles that break projection
 
     @property
     def x(self):
@@ -281,6 +281,13 @@ class Player3D:
         while self.angle >= 2 * math.pi:
             self.angle -= 2 * math.pi
 
+    def _clamp_pitch(self):
+        """Clamp vertical look to a projection-safe range."""
+        if self.pitch > self.max_pitch:
+            self.pitch = self.max_pitch
+        elif self.pitch < -self.max_pitch:
+            self.pitch = -self.max_pitch
+
     def handle_mouse_look(self, mouse_dx, mouse_dy=0):
         """
         Handle mouse look rotation and pitch
@@ -291,11 +298,7 @@ class Player3D:
         """
         self.rotate(mouse_dx * self.mouse_sensitivity)
         self.pitch -= mouse_dy * self.mouse_sensitivity
-        if self.max_pitch > 0.0:
-            if self.pitch > self.max_pitch:
-                self.pitch = self.max_pitch
-            elif self.pitch < -self.max_pitch:
-                self.pitch = -self.max_pitch
+        self._clamp_pitch()
 
     def handle_keyboard_turn(self, turn_input, dt):
         """
@@ -325,6 +328,7 @@ class Player3D:
         self.world_y = y + 0.5
         self.grid_x = x
         self.grid_y = y
+        self._clamp_pitch()
 
     def get_angle_degrees(self):
         """Get view angle in degrees"""
