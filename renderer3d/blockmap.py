@@ -228,75 +228,117 @@ def blockmap_cast_all_rays(blockmap, bm_w, bm_h, bpx, bpy, px, py,
                 if blockmap[map_y, map_x] > 0:
                     hit = True
             elif even_row and not even_col:
-                # Gorizontal devor — faqat Y qadami + world hujayra validatsiyasi
+                # Gorizontal devor — faqat Y qadami + bitmask validatsiya
                 if side == 0 and blockmap[map_y, map_x] > 0:
-                    # Nurning world pozitsiyasini hisoblash
-                    if step_y > 0:
-                        wwy = map_y // 2
-                    else:
-                        wwy = (map_y + 1) // 2
-                    t_y = (wwy - py) / ray_dir_y
-                    world_x_at_cross = px + t_y * ray_dir_x
-                    expected_bm_col = int32(2 * int32(int(math.floor(world_x_at_cross))) + 1)
-                    if expected_bm_col == map_x:
-                        hit = True
-                    # Aks holda — noto'g'ri hujayra, o'tkazib yuborish
+                    wy = map_y // 2
+                    t_y = (wy - py) / ray_dir_y
+                    world_x = px + t_y * ray_dir_x
+                    cell_x = int32(int(math.floor(world_x)))
+                    frac_x = world_x - math.floor(world_x)
+                    # Bitmask orqali validatsiya
+                    # cell_x da gorizontal devor bormi?
+                    if 0 <= cell_x < cols:
+                        if 0 <= wy - 1 < rows:
+                            if (walls[(wy - 1) * cols + cell_x] & bottom) != 0:
+                                hit = True
+                        if not hit and 0 <= wy < rows:
+                            if (walls[wy * cols + cell_x] & top) != 0:
+                                hit = True
+                    # Epsilon: chegara yaqinida qo'shni hujayrani tekshirish
+                    if not hit and frac_x < 0.02 and cell_x - 1 >= 0:
+                        alt_cx = cell_x - 1
+                        if 0 <= wy - 1 < rows:
+                            if (walls[(wy - 1) * cols + alt_cx] & bottom) != 0:
+                                hit = True
+                        if not hit and 0 <= wy < rows:
+                            if (walls[wy * cols + alt_cx] & top) != 0:
+                                hit = True
+                    if not hit and frac_x > 0.98 and cell_x + 1 < cols:
+                        alt_cx = cell_x + 1
+                        if 0 <= wy - 1 < rows:
+                            if (walls[(wy - 1) * cols + alt_cx] & bottom) != 0:
+                                hit = True
+                        if not hit and 0 <= wy < rows:
+                            if (walls[wy * cols + alt_cx] & top) != 0:
+                                hit = True
             elif not even_row and even_col:
-                # Vertikal devor — faqat X qadami + world hujayra validatsiyasi
+                # Vertikal devor — faqat X qadami + bitmask validatsiya
                 if side == 1 and blockmap[map_y, map_x] > 0:
-                    # Nurning world pozitsiyasini hisoblash
-                    if step_x > 0:
-                        wwx = map_x // 2
-                    else:
-                        wwx = (map_x + 1) // 2
-                    t_x = (wwx - px) / ray_dir_x
-                    world_y_at_cross = py + t_x * ray_dir_y
-                    expected_bm_row = int32(2 * int32(int(math.floor(world_y_at_cross))) + 1)
-                    if expected_bm_row == map_y:
-                        hit = True
-                    # Aks holda — noto'g'ri hujayra, o'tkazib yuborish
+                    wx = map_x // 2
+                    t_x = (wx - px) / ray_dir_x
+                    world_y = py + t_x * ray_dir_y
+                    cell_y = int32(int(math.floor(world_y)))
+                    frac_y = world_y - math.floor(world_y)
+                    # Bitmask orqali validatsiya
+                    if 0 <= cell_y < rows:
+                        if 0 <= wx - 1 < cols:
+                            if (walls[cell_y * cols + (wx - 1)] & right) != 0:
+                                hit = True
+                        if not hit and 0 <= wx < cols:
+                            if (walls[cell_y * cols + wx] & left) != 0:
+                                hit = True
+                    # Epsilon: chegara yaqinida qo'shni hujayrani tekshirish
+                    if not hit and frac_y < 0.02 and cell_y - 1 >= 0:
+                        alt_cy = cell_y - 1
+                        if 0 <= alt_cy < rows:
+                            if 0 <= wx - 1 < cols:
+                                if (walls[alt_cy * cols + (wx - 1)] & right) != 0:
+                                    hit = True
+                            if not hit and 0 <= wx < cols:
+                                if (walls[alt_cy * cols + wx] & left) != 0:
+                                    hit = True
+                    if not hit and frac_y > 0.98 and cell_y + 1 < rows:
+                        alt_cy = cell_y + 1
+                        if 0 <= alt_cy < rows:
+                            if 0 <= wx - 1 < cols:
+                                if (walls[alt_cy * cols + (wx - 1)] & right) != 0:
+                                    hit = True
+                            if not hit and 0 <= wx < cols:
+                                if (walls[alt_cy * cols + wx] & left) != 0:
+                                    hit = True
             else:
-                # Ustun (juft, juft) — mini-blok sifatida tekshirish
-                pillar_cx = map_x // 2
-                pillar_cy = map_y // 2
+                # Ustun (juft, juft) — yaqindagi devor segmentini tekshirish
                 if blockmap[map_y, map_x] > 0:
                     if side == 0:
-                        # Y qadami — ustunning Y yuziga urildi
-                        if step_y > 0:
-                            pillar_face_y = pillar_cy - 0.1  # wht
-                        else:
-                            pillar_face_y = pillar_cy + 0.1
-                        t_pillar = (pillar_face_y - py) / ray_dir_y
-                        pillar_hit_x = px + t_pillar * ray_dir_x
-                        # Ustun X chegarasi ichida ekanligini tekshirish
-                        if pillar_cx - 0.1 <= pillar_hit_x <= pillar_cx + 0.1:
-                            hit = True
-                        else:
-                            # Yonidagi devor segmentini tekshirish
-                            cwx = px + t_pillar * ray_dir_x
-                            cx_floor = int32(int(math.floor(cwx)))
-                            check_col = int32(2 * cx_floor + 1)
-                            if 1 <= check_col < bm_w:
-                                if blockmap[map_y, check_col] > 0:
+                        wwy = map_y // 2
+                        t_y = (wwy - py) / ray_dir_y
+                        cwx = px + t_y * ray_dir_x
+                        cx_floor = int32(int(math.floor(cwx)))
+                        frac_x = cwx - math.floor(cwx)
+                        check_col = int32(2 * cx_floor + 1)
+                        if 1 <= check_col < bm_w:
+                            if blockmap[map_y, check_col] > 0:
+                                hit = True
+                        # Epsilon: chegara yaqinida qo'shni tekshirish
+                        if not hit and frac_x < 0.02:
+                            alt_col = int32(2 * (cx_floor - 1) + 1)
+                            if 1 <= alt_col < bm_w:
+                                if blockmap[map_y, alt_col] > 0:
+                                    hit = True
+                        if not hit and frac_x > 0.98:
+                            alt_col = int32(2 * (cx_floor + 1) + 1)
+                            if 1 <= alt_col < bm_w:
+                                if blockmap[map_y, alt_col] > 0:
                                     hit = True
                     elif side == 1:
-                        # X qadami — ustunning X yuziga urildi
-                        if step_x > 0:
-                            pillar_face_x = pillar_cx - 0.1  # wht
-                        else:
-                            pillar_face_x = pillar_cx + 0.1
-                        t_pillar = (pillar_face_x - px) / ray_dir_x
-                        pillar_hit_y = py + t_pillar * ray_dir_y
-                        # Ustun Y chegarasi ichida ekanligini tekshirish
-                        if pillar_cy - 0.1 <= pillar_hit_y <= pillar_cy + 0.1:
-                            hit = True
-                        else:
-                            # Yonidagi devor segmentini tekshirish
-                            cwy = py + t_pillar * ray_dir_y
-                            cy_floor = int32(int(math.floor(cwy)))
-                            check_row = int32(2 * cy_floor + 1)
-                            if 1 <= check_row < bm_h:
-                                if blockmap[check_row, map_x] > 0:
+                        wwx = map_x // 2
+                        t_x = (wwx - px) / ray_dir_x
+                        cwy = py + t_x * ray_dir_y
+                        cy_floor = int32(int(math.floor(cwy)))
+                        frac_y = cwy - math.floor(cwy)
+                        check_row = int32(2 * cy_floor + 1)
+                        if 1 <= check_row < bm_h:
+                            if blockmap[check_row, map_x] > 0:
+                                hit = True
+                        if not hit and frac_y < 0.02:
+                            alt_row = int32(2 * (cy_floor - 1) + 1)
+                            if 1 <= alt_row < bm_h:
+                                if blockmap[alt_row, map_x] > 0:
+                                    hit = True
+                        if not hit and frac_y > 0.98:
+                            alt_row = int32(2 * (cy_floor + 1) + 1)
+                            if 1 <= alt_row < bm_h:
+                                if blockmap[alt_row, map_x] > 0:
                                     hit = True
 
             # Maksimal masofa
