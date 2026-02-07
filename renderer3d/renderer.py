@@ -464,6 +464,10 @@ class Renderer3D:
 
         # True 3D pitch: tan(θ) = pitch / 2
         p = player.pitch
+        if p > 1.0:
+            p = 1.0
+        elif p < -1.0:
+            p = -1.0
         hyp = math.sqrt(4.0 + p * p)
         cos_p = 2.0 / hyp
         sin_p = p / hyp
@@ -483,6 +487,10 @@ class Renderer3D:
 
         # True 3D pitch: tan(θ) = pitch / 2
         p = player.pitch
+        if p > 1.0:
+            p = 1.0
+        elif p < -1.0:
+            p = -1.0
         hyp = math.sqrt(4.0 + p * p)
         cos_p = 2.0 / hyp
         sin_p = p / hyp
@@ -615,6 +623,10 @@ class Renderer3D:
 
         # True 3D pitch projection for sprite
         p = player.pitch
+        if p > 1.0:
+            p = 1.0
+        elif p < -1.0:
+            p = -1.0
         hyp = math.sqrt(4.0 + p * p)
         cos_p = 2.0 / hyp
         sin_p = p / hyp
