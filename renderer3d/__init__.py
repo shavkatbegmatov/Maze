@@ -7,7 +7,7 @@ from .player3d import Player3D
 from .renderer import Renderer3D
 from .textures import TextureManager
 from .minimap import Minimap3D
-from .blockmap import walls_to_blockmap, pos_to_blockmap
+from .blockmap import walls_to_blockmap, pos_to_blockmap, WALL_HALF_THICKNESS
 
 __all__ = ['Raycaster', 'Player3D', 'Renderer3D', 'TextureManager', 'Minimap3D',
-           'walls_to_blockmap', 'pos_to_blockmap']
+           'walls_to_blockmap', 'pos_to_blockmap', 'WALL_HALF_THICKNESS']

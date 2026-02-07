@@ -60,7 +60,7 @@ class Player3D:
 
         # Vertical look (pitch)
         self.pitch = 0.0  # Vertical look offset (-1.0 to 1.0, 0 = horizontal)
-        self.max_pitch = 0.6  # Maximum pitch limit
+        self.max_pitch = 0.0  # 0 = cheklovsiz (erkin yuqoriga/pastga qarash)
 
     @property
     def x(self):
@@ -291,10 +291,11 @@ class Player3D:
         """
         self.rotate(mouse_dx * self.mouse_sensitivity)
         self.pitch -= mouse_dy * self.mouse_sensitivity
-        if self.pitch > self.max_pitch:
-            self.pitch = self.max_pitch
-        elif self.pitch < -self.max_pitch:
-            self.pitch = -self.max_pitch
+        if self.max_pitch > 0.0:
+            if self.pitch > self.max_pitch:
+                self.pitch = self.max_pitch
+            elif self.pitch < -self.max_pitch:
+                self.pitch = -self.max_pitch
 
     def handle_keyboard_turn(self, turn_input, dt):
         """

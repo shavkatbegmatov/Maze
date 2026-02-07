@@ -8,7 +8,7 @@ import math
 import numpy as np
 from numba import njit, int32, float64
 
-WALL_HALF_THICKNESS = 0.125  # Har bir devor 0.25 world unit qalinlikda
+WALL_HALF_THICKNESS = 0.2  # Har bir devor 0.4 world unit qalinlikda (g'isht qalinligi)
 
 
 @njit(cache=True)

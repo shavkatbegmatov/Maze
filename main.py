@@ -43,7 +43,7 @@ from utils.colors import (
 from config import GAME_TITLE, GAME_VERSION
 
 # 3D Renderer imports
-from renderer3d import Raycaster, Player3D, Renderer3D, TextureManager, Minimap3D
+from renderer3d import Raycaster, Player3D, Renderer3D, TextureManager, Minimap3D, WALL_HALF_THICKNESS
 
 WINDOWSIZECHANGED_EVENT = getattr(pygame, "WINDOWSIZECHANGED", None)
 WINDOWRESIZED_EVENT = getattr(pygame, "WINDOWRESIZED", None)
@@ -1219,6 +1219,10 @@ class MazeGame:
         # Get visible range from camera
         min_x, max_x, min_y, max_y = self.camera_manager.get_visible_range()
 
+        # Devor qalinligi — 3D bilan sinxron
+        wall_w = max(3, round(2 * WALL_HALF_THICKNESS * self.cell_size))
+        half_w = wall_w // 2
+
         for y in range(min_y, max_y):
             for x in range(min_x, max_x):
                 if x < 0 or x >= cols or y < 0 or y >= rows:
@@ -1234,19 +1238,28 @@ class MazeGame:
                 y1 = y0 + self.cell_size
 
                 if w & TOP:
-                    pygame.draw.line(self.screen, COLOR_WALL, (x0, y0), (x1, y0), 3)
+                    pygame.draw.rect(self.screen, COLOR_WALL,
+                                     (x0 - half_w, y0 - half_w, self.cell_size + wall_w, wall_w))
                 if w & RIGHT:
-                    pygame.draw.line(self.screen, COLOR_WALL, (x1, y0), (x1, y1), 3)
+                    pygame.draw.rect(self.screen, COLOR_WALL,
+                                     (x1 - half_w, y0 - half_w, wall_w, self.cell_size + wall_w))
                 if w & BOTTOM:
-                    pygame.draw.line(self.screen, COLOR_WALL, (x0, y1), (x1, y1), 3)
+                    pygame.draw.rect(self.screen, COLOR_WALL,
+                                     (x0 - half_w, y1 - half_w, self.cell_size + wall_w, wall_w))
                 if w & LEFT:
-                    pygame.draw.line(self.screen, COLOR_WALL, (x0, y0), (x0, y1), 3)
+                    pygame.draw.rect(self.screen, COLOR_WALL,
+                                     (x0 - half_w, y0 - half_w, wall_w, self.cell_size + wall_w))
 
     def _draw_cell(self, x, y, color, pad=6):
         """Draw filled cell with camera support"""
         # Skip if not visible
         if not self.camera_manager.is_visible(x, y):
             return
+
+        # Qalin devorlar bilan overlap bo'lmasligi uchun min padding
+        min_pad = max(3, round(2 * WALL_HALF_THICKNESS * self.cell_size)) // 2 + 1
+        if pad < min_pad:
+            pad = min_pad
 
         # Convert to screen coordinates
         sx, sy = self.camera_manager.world_to_screen(x, y)
@@ -1258,6 +1271,8 @@ class MazeGame:
         # Scale padding for smaller cells
         if self.cell_size < 25:
             pad = max(2, pad - 2)
+            if pad < min_pad:
+                pad = min_pad
             rx = sx + pad
             ry = sy + pad
             rw = self.cell_size - pad * 2
@@ -1315,6 +1330,11 @@ class MazeGame:
         # Draw boss (larger than normal enemies)
         color = boss.get_color()
         pad = int(3 * boss.size_multiplier)
+
+        # Qalin devorlar bilan overlap bo'lmasligi uchun min padding
+        min_pad = max(3, round(2 * WALL_HALF_THICKNESS * self.cell_size)) // 2 + 1
+        if pad < min_pad:
+            pad = min_pad
 
         rx = sx + pad
         ry = sy + pad
@@ -1383,12 +1403,13 @@ class MazeGame:
             color = wall.get_glow_color()
             self._draw_cell(wall.x, wall.y, color, pad=3)
 
-            # Draw border
+            # Draw border — qalin devorlar bilan sinxron padding
             sx, sy = self.camera_manager.world_to_screen(wall.x, wall.y)
-            rx = sx + 3
-            ry = sy + 3
-            rw = self.cell_size - 6
-            rh = self.cell_size - 6
+            bpad = max(3, round(2 * WALL_HALF_THICKNESS * self.cell_size)) // 2 + 1
+            rx = sx + bpad
+            ry = sy + bpad
+            rw = self.cell_size - bpad * 2
+            rh = self.cell_size - bpad * 2
             pygame.draw.rect(self.screen, (200, 200, 255), (rx, ry, rw, rh), 2, border_radius=4)
 
     def _render_particles(self):
