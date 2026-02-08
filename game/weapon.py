@@ -207,6 +207,10 @@ class Weapon:
             return True, dot  # dot = masofa nur bo'ylab
         return False, 0.0
 
+    def can_reload(self):
+        """Reload qilish mumkinmi?"""
+        return not self.is_reloading and self.magazine_ammo < self.max_magazine and self.reserve_ammo > 0
+
     def start_reload(self):
         """Reload boshlash"""
         if self.is_reloading or self.magazine_ammo >= self.max_magazine or self.reserve_ammo <= 0:

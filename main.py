@@ -48,6 +48,7 @@ from renderer3d import Raycaster, Player3D, Renderer3D, TextureManager, Minimap3
 # Combat imports
 from game.weapon import Weapon
 from game.combat import CombatManager
+from game.sound_manager import SoundManager
 
 # 2D devor qalinligi (2D maze chizish uchun)
 _2D_WALL_HALF_THICKNESS = 0.2
@@ -64,7 +65,9 @@ class MazeGame:
     Main game class
     """
     def __init__(self):
+        pygame.mixer.pre_init(22050, -16, 2, 512)
         pygame.init()
+        pygame.mixer.set_num_channels(16)
 
         # Managers
         self.level_manager = LevelManager()
@@ -140,6 +143,9 @@ class MazeGame:
         # Combat system
         self.weapon = Weapon()
         self.combat_manager = CombatManager()
+
+        # Sound system
+        self.sound_manager = SoundManager()
 
     def _create_screen(self, width, height):
         """Create or resize screen using DisplayManager"""
@@ -296,9 +302,12 @@ class MazeGame:
         """Handle menu input"""
         if key in (pygame.K_UP, pygame.K_w):
             self.menu_index = (self.menu_index - 1) % len(self.menu_items)
+            self.sound_manager.play('menu_select')
         elif key in (pygame.K_DOWN, pygame.K_s):
             self.menu_index = (self.menu_index + 1) % len(self.menu_items)
+            self.sound_manager.play('menu_select')
         elif key == pygame.K_RETURN:
+            self.sound_manager.play('menu_select')
             self._handle_menu_select()
         elif key == pygame.K_ESCAPE:
             self.running = False
@@ -365,11 +374,17 @@ class MazeGame:
         """Handle 3D playing state input"""
         if key == pygame.K_p:
             self._release_mouse()
+            self.sound_manager.play('pause')
+            self.sound_manager.stop_music()
             self.game_flow.pause_game()
         elif key == pygame.K_ESCAPE:
             self._release_mouse()
+            self.sound_manager.play('pause')
+            self.sound_manager.stop_music()
             self.game_flow.pause_game()
         elif key == pygame.K_r:
+            if self.weapon.can_reload():
+                self.sound_manager.play('reload')
             self.weapon.start_reload()
         elif key == pygame.K_F5:
             self._quick_save()
@@ -405,6 +420,7 @@ class MazeGame:
         # Re-grab mouse if in 3D mode
         if self.game_mode == 1 and self.state_manager.current_state == GameState.PLAYING_3D:
             self._grab_mouse()
+            self.sound_manager.play_music()
 
     def _init_3d_renderer(self):
         """Initialize 3D rendering components"""
@@ -421,6 +437,7 @@ class MazeGame:
 
     def _start_new_game(self):
         """Start a new game"""
+        self.sound_manager.stop_music()
         level, gen = self.game_flow.start_new_game(
             self.selected_difficulty,
             self.selected_generator,
@@ -467,6 +484,7 @@ class MazeGame:
                     self._init_player_3d(level)
                     self.state_manager.transition_to(GameState.PLAYING_3D)
                     self._grab_mouse()
+                    self.sound_manager.play_music()
                 else:
                     self.game_flow.generation_complete()
             else:
@@ -763,7 +781,12 @@ class MazeGame:
             return
 
         if not self.weapon.can_fire():
+            # Bo'sh magazin click
+            if self.weapon.magazine_ammo <= 0 and not self.weapon.is_reloading:
+                self.sound_manager.play('empty_click')
             return
+
+        self.sound_manager.play('shoot')
 
         # Otish
         result = self.weapon.fire(
@@ -775,16 +798,19 @@ class MazeGame:
         self.weapon.trail_hit = result['hit']
 
         if result['hit']:
+            self.sound_manager.play('hit_marker')
             if result['enemy']:
                 # Dushman zarar oldi
                 killed = result['enemy'].take_damage(self.weapon.damage)
                 self.combat_manager.register_enemy_hit(result['enemy'])
                 if killed:
+                    self.sound_manager.play('enemy_death')
                     self._show_message("Enemy eliminated!", 0.5)
             elif result['boss_hit']:
                 # Boss zarar oldi
                 if level.boss_manager.active:
                     if level.boss_manager.damage_boss(self.weapon.damage):
+                        self.sound_manager.play('boss_defeated')
                         self._show_message("BOSS DEFEATED!")
                     else:
                         boss = level.boss_manager.get_boss()
@@ -857,6 +883,7 @@ class MazeGame:
                             self._init_player_3d(level)
                             self.state_manager.transition_to(GameState.PLAYING_3D)
                             self._grab_mouse()
+                            self.sound_manager.play_music()
                         else:
                             self.game_flow.generation_complete()
                         break
@@ -869,6 +896,7 @@ class MazeGame:
                         self._init_player_3d(level)
                         self.state_manager.transition_to(GameState.PLAYING_3D)
                         self._grab_mouse()
+                        self.sound_manager.play_music()
                     else:
                         self.game_flow.generation_complete()
                     break
@@ -900,6 +928,7 @@ class MazeGame:
 
             # Handle boss events
             if boss_events['fight_started']:
+                self.sound_manager.play('boss_start')
                 self._show_message("BOSS FIGHT!")
                 # Boss fight particles
                 boss = level.boss_manager.get_boss()
@@ -907,6 +936,7 @@ class MazeGame:
                     self.particle_effects.explosion(boss.x, boss.y, (180, 50, 50))
 
             if boss_events['boss_attacked']:
+                self.sound_manager.play('player_damage')
                 self.particle_effects.player_damage(level.player.x, level.player.y)
 
             if boss_events['boss_charged']:
@@ -921,6 +951,7 @@ class MazeGame:
                     self._show_message("Minions summoned!")
 
             if boss_events['boss_defeated']:
+                self.sound_manager.play('boss_defeated')
                 boss = level.boss_manager.get_boss()
                 if boss:
                     # Epic death explosion
@@ -934,6 +965,7 @@ class MazeGame:
 
             # Check if player died from boss damage
             if not level.player.is_alive():
+                self.sound_manager.play('game_over')
                 self.particle_effects.explosion(level.player.x, level.player.y, (255, 50, 50))
                 self.game_flow.game_over('boss')
 
@@ -982,7 +1014,11 @@ class MazeGame:
         moved = self.player_3d.move(forward, strafe, level.grid, level.grid_cols, level.grid_rows, dt)
 
         # Bob/sway — qurolga harakatlanish holatini bildirish
-        self.weapon.set_moving(forward != 0 or strafe != 0)
+        is_moving = forward != 0 or strafe != 0
+        self.weapon.set_moving(is_moving)
+
+        # Qadam ovozlari
+        self.sound_manager.update_footsteps(dt, is_moving)
 
         # Apply keyboard turning
         if turn != 0:
@@ -1006,8 +1042,21 @@ class MazeGame:
                 level.rows
             )
 
-            # Handle collision results
+            # Handle collision results — sound triggers
+            if collision_result['powerup']:
+                self.sound_manager.play('powerup')
+            if collision_result['key']:
+                self.sound_manager.play('key_pickup')
+            if collision_result['door']:
+                self.sound_manager.play('door_open')
+            if collision_result['trap']:
+                self.sound_manager.play('trap')
+            if collision_result['enemy']:
+                self.sound_manager.play('player_damage')
+
             if collision_result['player_died']:
+                self.sound_manager.play('game_over')
+                self.sound_manager.stop_music()
                 self._release_mouse()
                 self.game_flow.game_over('died')
                 return
@@ -1016,11 +1065,15 @@ class MazeGame:
         self.weapon.update(dt)
 
         # Update combat (dushmanlar otadi)
+        old_flash = self.combat_manager.damage_flash_timer
         self.combat_manager.update(
             dt, level.enemy_manager, level.boss_manager,
             self.player_3d, level.player,
             level.grid, level.grid_cols, level.grid_rows
         )
+        # Yangi damage flash boshlansa — player_damage ovozi
+        if self.combat_manager.damage_flash_timer > old_flash:
+            self.sound_manager.play('player_damage')
 
         # O'lik dushmanlarni tozalash
         level.enemy_manager.remove_dead()
@@ -1030,12 +1083,16 @@ class MazeGame:
 
         # Player o'limi tekshiruvi
         if not level.player.is_alive():
+            self.sound_manager.play('game_over')
+            self.sound_manager.stop_music()
             self._release_mouse()
             self.game_flow.game_over('died')
             return
 
         # Check for level completion
         if level.player.x == level.goal_pos[0] and level.player.y == level.goal_pos[1]:
+            self.sound_manager.play('level_complete')
+            self.sound_manager.stop_music()
             self._release_mouse()
             self.game_flow.level_completed(level, level.player)
             return
@@ -1051,12 +1108,16 @@ class MazeGame:
             )
 
             if boss_events['fight_started']:
+                self.sound_manager.play('boss_start')
                 self._show_message("BOSS FIGHT!")
 
             if boss_events['boss_defeated']:
+                self.sound_manager.play('boss_defeated')
                 self._show_message("BOSS DEFEATED!")
 
             if not level.player.is_alive():
+                self.sound_manager.play('game_over')
+                self.sound_manager.stop_music()
                 self._release_mouse()
                 self.game_flow.game_over('boss')
 
@@ -1110,36 +1171,42 @@ class MazeGame:
 
                 # Particle effects for collision events
                 if collision_result['powerup']:
+                    self.sound_manager.play('powerup')
                     powerup = collision_result['powerup']
                     self.particle_effects.powerup_collection(
                         powerup.x, powerup.y, powerup.type
                     )
 
                 if collision_result['key']:
+                    self.sound_manager.play('key_pickup')
                     key = collision_result['key']
                     self.particle_effects.key_collection(
                         key.x, key.y, key.get_color_rgb()
                     )
 
                 if collision_result['door']:
+                    self.sound_manager.play('door_open')
                     door = collision_result['door']
                     self.particle_effects.door_unlock(
                         door.x, door.y, door.get_color_rgb()
                     )
 
                 if collision_result['trap']:
+                    self.sound_manager.play('trap')
                     trap = collision_result['trap']
                     self.particle_effects.trap_trigger(
                         trap.x, trap.y, trap.type
                     )
 
                 if collision_result['enemy']:
+                    self.sound_manager.play('player_damage')
                     # Player took damage from enemy
                     self.particle_effects.player_damage(
                         level.player.x, level.player.y
                     )
 
                 if collision_result['player_died']:
+                    self.sound_manager.play('game_over')
                     # Death explosion
                     self.particle_effects.explosion(
                         level.player.x, level.player.y, (255, 50, 50)

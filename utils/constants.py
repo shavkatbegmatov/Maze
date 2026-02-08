@@ -121,5 +121,12 @@ ENEMY_ACCURACY = {'patrol': 0.15, 'chase': 0.25, 'teleport': 0.30, 'smart': 0.40
 ENEMY_SHOOT_RANGE = {'patrol': 4.0, 'chase': 5.0, 'teleport': 6.0, 'smart': 7.0}
 ENEMY_SHOOT_DAMAGE = {'patrol': 5, 'chase': 8, 'teleport': 10, 'smart': 12}
 
+# Audio sozlamalari
+AUDIO_SAMPLE_RATE = 22050
+AUDIO_MASTER_VOLUME = 0.7
+AUDIO_SFX_VOLUME = 0.8
+AUDIO_MUSIC_VOLUME = 0.3
+AUDIO_FOOTSTEP_INTERVAL = 0.35
+
 # Save file
 SAVE_FILE = "saves/savegame.json"
