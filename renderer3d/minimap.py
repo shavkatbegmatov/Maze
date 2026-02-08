@@ -204,9 +204,12 @@ class Minimap3D:
         offset_x = 5
         offset_y = 5
 
-        # Player position
-        px = int(player.world_x * scale_x) + offset_x
-        py = int(player.world_y * scale_y) + offset_y
+        # Player position — grid koordinatalaridan cell koordinatalariga
+        # world_x = 2*cell_x + 1.5 => cell_x = (world_x - 1.5) / 2
+        cell_px = (player.world_x - 1.5) / 2.0
+        cell_py = (player.world_y - 1.5) / 2.0
+        px = int(cell_px * scale_x) + offset_x
+        py = int(cell_py * scale_y) + offset_y
 
         # Draw FOV cone
         fov_length = 15

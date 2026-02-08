@@ -111,8 +111,8 @@ def _numba_draw_walls(ray_results, frame_buffer, tex_ns, tex_ew,
         elif tex_x_pixel < 0:
             tex_x_pixel = 0
 
-        # Shading
-        shade = 1.0 - (corrected_dist / 15.0)
+        # Shading (grid masofalar kattaroq — 25.0 bilan normallashtirish)
+        shade = 1.0 - (corrected_dist / 25.0)
         if shade < 0.3:
             shade = 0.3
         elif shade > 1.0:
@@ -215,7 +215,7 @@ def _numba_draw_floor_ceiling(frame_buffer, render_height, num_rays,
         floor_y = py + row_dist * dir_ly
 
         # Distance shading
-        shade = 1.0 - row_dist / 12.0
+        shade = 1.0 - row_dist / 20.0
         if shade < 0.15:
             shade = 0.15
         elif shade > 1.0:
@@ -410,7 +410,7 @@ class Renderer3D:
         self._draw_ceiling_floor(player)
 
         # 2. Cast rays and draw walls to frame buffer
-        self._draw_walls(player, level.walls, level.cols, level.rows)
+        self._draw_walls(player, level.grid, level.grid_cols, level.grid_rows)
 
         # 3. Create render surface and blit frame buffer
         # Use subsurface if screen is larger than render area
@@ -441,13 +441,14 @@ class Renderer3D:
             px, py, angle, half_fov, int32(pitch_offset)
         )
 
-    def _draw_walls(self, player, walls, cols, rows):
+    def _draw_walls(self, player, grid, grid_cols, grid_rows):
         """Draw walls using raycasting with Numba JIT optimization"""
         px, py = player.world_x, player.world_y
         angle = player.angle
 
         # Cast all rays (returns numpy array)
-        ray_results = self.raycaster.cast_all_rays_blockmap(walls, cols, rows, px, py, angle)
+        ray_results = self.raycaster.cast_all_rays_grid(
+            grid, grid_rows, grid_cols, px, py, angle)
 
         pitch_offset = int(player.pitch * self.render_height * 0.5)
 
@@ -467,11 +468,14 @@ class Renderer3D:
         p_angle = player.angle
 
         # Collect all visible entities
+        # Entity pozitsiyalari cell koordinatalarida — grid'ga convert qilish:
+        # grid_x = 2 * cell_x + 1.5, grid_y = 2 * cell_y + 1.5
+
         # Goal
         gx, gy = level.goal_pos
         if self._is_visible(gx, gy, fog_manager):
             sprites.append({
-                'x': gx + 0.5, 'y': gy + 0.5,
+                'x': 2 * gx + 1.5, 'y': 2 * gy + 1.5,
                 'surface': self._sprite_cache['goal'],
                 'size': 0.6, 'pulse': True
             })
@@ -483,7 +487,7 @@ class Renderer3D:
                 cache_key = f'enemy_{enemy_type}'
                 surface = self._sprite_cache.get(cache_key, self._sprite_cache['enemy_patrol'])
                 sprites.append({
-                    'x': enemy.x + 0.5, 'y': enemy.y + 0.5,
+                    'x': 2 * enemy.x + 1.5, 'y': 2 * enemy.y + 1.5,
                     'surface': surface, 'size': 0.5
                 })
 
@@ -494,7 +498,7 @@ class Renderer3D:
                 cache_key = f'powerup_{powerup_type}'
                 surface = self._sprite_cache.get(cache_key, self._sprite_cache['powerup_energy'])
                 sprites.append({
-                    'x': powerup.x + 0.5, 'y': powerup.y + 0.5,
+                    'x': 2 * powerup.x + 1.5, 'y': 2 * powerup.y + 1.5,
                     'surface': surface, 'size': 0.3, 'pulse': True
                 })
 
@@ -502,7 +506,7 @@ class Renderer3D:
         for key in level.door_manager.keys:
             if not key.collected and self._is_visible(key.x, key.y, fog_manager):
                 sprites.append({
-                    'x': key.x + 0.5, 'y': key.y + 0.5,
+                    'x': 2 * key.x + 1.5, 'y': 2 * key.y + 1.5,
                     'surface': self._sprite_cache['key'],
                     'size': 0.35
                 })
@@ -511,7 +515,7 @@ class Renderer3D:
         for trap in level.trap_manager.get_visible_traps():
             if self._is_visible(trap.x, trap.y, fog_manager):
                 sprites.append({
-                    'x': trap.x + 0.5, 'y': trap.y + 0.5,
+                    'x': 2 * trap.x + 1.5, 'y': 2 * trap.y + 1.5,
                     'surface': self._sprite_cache['trap'],
                     'size': 0.4
                 })
@@ -521,7 +525,7 @@ class Renderer3D:
             boss = level.boss_manager.get_boss()
             if boss and boss.alive and self._is_visible(boss.x, boss.y, fog_manager):
                 sprites.append({
-                    'x': boss.x + 0.5, 'y': boss.y + 0.5,
+                    'x': 2 * boss.x + 1.5, 'y': 2 * boss.y + 1.5,
                     'surface': self._sprite_cache['boss'],
                     'size': 1.0
                 })
@@ -619,7 +623,7 @@ class Renderer3D:
         scaled = pygame.transform.scale(sprite['surface'], (sprite_width, sprite_height))
 
         # Apply distance shading
-        shade = max(0.3, min(1.0, 1.0 - (dist / 12.0)))
+        shade = max(0.3, min(1.0, 1.0 - (dist / 20.0)))
 
         # Apply pulsing effect
         if sprite.get('pulse', False):

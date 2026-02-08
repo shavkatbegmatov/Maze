@@ -1,15 +1,15 @@
 """
 3D Player - First-person player with smooth movement and collision
+Grid koordinatalarida ishlaydi (blockmap grid: (2*cols+1) x (2*rows+1))
 """
 
 import math
-from utils.constants import TOP, RIGHT, BOTTOM, LEFT
-from .blockmap import WALL_HALF_THICKNESS
 
 
 class Player3D:
     """
     3D first-person player with smooth movement
+    Grid koordinatalarida: spawn pozitsiyasi = (2*cell_x + 1.5, 2*cell_y + 1.5)
     """
 
     def __init__(self, x, y, angle=0):
@@ -17,14 +17,14 @@ class Player3D:
         Initialize 3D player
 
         Args:
-            x, y: Starting cell coordinates
+            x, y: Starting cell coordinates (maze cell)
             angle: Starting view angle in radians (0 = east, pi/2 = south)
         """
-        # Float position (center of cell)
-        self.world_x = x + 0.5
-        self.world_y = y + 0.5
+        # Grid pozitsiya (koridor markazi)
+        self.world_x = 2.0 * x + 1.5
+        self.world_y = 2.0 * y + 1.5
 
-        # Grid position (for game logic)
+        # Maze cell pozitsiya (game logic uchun)
         self.grid_x = x
         self.grid_y = y
 
@@ -38,9 +38,8 @@ class Player3D:
         self.mouse_sensitivity = 0.003  # Radians per pixel
 
         # Collision settings
-        # Keep the camera slightly away from visible wall plane
-        self.wall_contact_buffer = 0.02
-        self.collision_radius = WALL_HALF_THICKNESS + self.wall_contact_buffer
+        # Grid koridori kengligi = 1.0 unit, radius < 0.5
+        self.collision_radius = 0.25
         self.collision_step = 0.05
         self.collision_epsilon = 1e-3
 
@@ -74,134 +73,53 @@ class Player3D:
 
     def sync_from_2d_player(self, player_2d):
         """
-        Sync position from 2D player
+        Sync position from 2D player (cell coords -> grid coords)
 
         Args:
             player_2d: The 2D Player instance
         """
         self.grid_x = player_2d.x
         self.grid_y = player_2d.y
-        self.world_x = player_2d.x + 0.5
-        self.world_y = player_2d.y + 0.5
+        self.world_x = 2.0 * player_2d.x + 1.5
+        self.world_y = 2.0 * player_2d.y + 1.5
 
     def sync_to_2d_player(self, player_2d):
         """
-        Sync position back to 2D player
+        Sync position back to 2D player (grid coords -> cell coords)
 
         Args:
             player_2d: The 2D Player instance
         """
-        player_2d.x = self.grid_x
-        player_2d.y = self.grid_y
+        player_2d.x = max(0, (int(self.world_x) - 1) // 2)
+        player_2d.y = max(0, (int(self.world_y) - 1) // 2)
 
-    def check_wall_collision(self, walls, cols, rows, new_x, new_y):
-        """
-        Check if position would collide with walls
-
-        Args:
-            walls: Maze walls array
-            cols, rows: Maze dimensions
-            new_x, new_y: Proposed new position
-
-        Returns:
-            (can_move_x, can_move_y) - booleans for each axis
-        """
-        can_x = not self._would_collide(walls, cols, rows, new_x, self.world_y)
-        can_y = not self._would_collide(walls, cols, rows, self.world_x, new_y)
-        return can_x, can_y
-
-    @staticmethod
-    def _circle_hits_vertical_wall(px, py, radius, wall_x, y0, y1):
-        """Circle-vs-vertical-segment intersection test."""
-        dx = px - wall_x
-        if dx < 0:
-            dx = -dx
-        if dx > radius:
-            return False
-
-        if py < y0:
-            closest_y = y0
-        elif py > y1:
-            closest_y = y1
-        else:
-            closest_y = py
-
-        dy = py - closest_y
-        return (dx * dx + dy * dy) <= (radius * radius)
-
-    @staticmethod
-    def _circle_hits_horizontal_wall(px, py, radius, x0, x1, wall_y):
-        """Circle-vs-horizontal-segment intersection test."""
-        dy = py - wall_y
-        if dy < 0:
-            dy = -dy
-        if dy > radius:
-            return False
-
-        if px < x0:
-            closest_x = x0
-        elif px > x1:
-            closest_x = x1
-        else:
-            closest_x = px
-
-        dx = px - closest_x
-        return (dx * dx + dy * dy) <= (radius * radius)
-
-    def _would_collide(self, walls, cols, rows, test_x, test_y):
-        """Check if circle player intersects any wall segment or map boundary."""
+    def _would_collide(self, grid, grid_cols, grid_rows, test_x, test_y):
+        """Grid-based collision: 4 burchak tekshirish."""
         r = self.collision_radius
-        eps = self.collision_epsilon
-
-        # Map boundary as solid outer walls
-        if test_x - r < eps or test_x + r > cols - eps:
-            return True
-        if test_y - r < eps or test_y + r > rows - eps:
-            return True
-
-        min_cell_x = max(0, int(math.floor(test_x - r)) - 1)
-        max_cell_x = min(cols - 1, int(math.floor(test_x + r)) + 1)
-        min_cell_y = max(0, int(math.floor(test_y - r)) - 1)
-        max_cell_y = min(rows - 1, int(math.floor(test_y + r)) + 1)
-
-        for cell_y in range(min_cell_y, max_cell_y + 1):
-            for cell_x in range(min_cell_x, max_cell_x + 1):
-                idx = cell_y * cols + cell_x
-                if idx < 0 or idx >= len(walls):
-                    continue
-                w = walls[idx]
-
-                # Left wall segment: x = cell_x, y in [cell_y, cell_y + 1]
-                if (w & LEFT) != 0:
-                    if self._circle_hits_vertical_wall(test_x, test_y, r, cell_x, cell_y, cell_y + 1):
-                        return True
-
-                # Right wall segment: x = cell_x + 1, y in [cell_y, cell_y + 1]
-                if (w & RIGHT) != 0:
-                    if self._circle_hits_vertical_wall(test_x, test_y, r, cell_x + 1, cell_y, cell_y + 1):
-                        return True
-
-                # Top wall segment: y = cell_y, x in [cell_x, cell_x + 1]
-                if (w & TOP) != 0:
-                    if self._circle_hits_horizontal_wall(test_x, test_y, r, cell_x, cell_x + 1, cell_y):
-                        return True
-
-                # Bottom wall segment: y = cell_y + 1, x in [cell_x, cell_x + 1]
-                if (w & BOTTOM) != 0:
-                    if self._circle_hits_horizontal_wall(test_x, test_y, r, cell_x, cell_x + 1, cell_y + 1):
-                        return True
-
+        corners = [
+            (test_x - r, test_y - r),
+            (test_x + r, test_y - r),
+            (test_x - r, test_y + r),
+            (test_x + r, test_y + r),
+        ]
+        for cx, cy in corners:
+            gx = int(cx)
+            gy = int(cy)
+            if gx < 0 or gx >= grid_cols or gy < 0 or gy >= grid_rows:
+                return True
+            if grid[gy, gx] != 0:
+                return True
         return False
 
-    def move(self, forward, strafe, walls, cols, rows, dt):
+    def move(self, forward, strafe, grid, grid_cols, grid_rows, dt):
         """
         Move player with collision detection
 
         Args:
             forward: Forward/backward input (-1 to 1)
             strafe: Left/right strafe input (-1 to 1)
-            walls: Maze walls array
-            cols, rows: Maze dimensions
+            grid: 2D int8 massiv (grid_rows, grid_cols), 1=solid, 0=bo'sh
+            grid_cols, grid_rows: Grid o'lchamlari
             dt: Delta time in seconds
 
         Returns:
@@ -241,18 +159,18 @@ class Player3D:
 
         for _ in range(steps):
             new_x = self.world_x + step_x
-            if not self._would_collide(walls, cols, rows, new_x, self.world_y):
+            if not self._would_collide(grid, grid_cols, grid_rows, new_x, self.world_y):
                 self.world_x = new_x
                 moved = True
 
             new_y = self.world_y + step_y
-            if not self._would_collide(walls, cols, rows, self.world_x, new_y):
+            if not self._would_collide(grid, grid_cols, grid_rows, self.world_x, new_y):
                 self.world_y = new_y
                 moved = True
 
-        # Update grid position
-        self.grid_x = int(self.world_x)
-        self.grid_y = int(self.world_y)
+        # Update grid position (cell coords)
+        self.grid_x = max(0, (int(self.world_x) - 1) // 2)
+        self.grid_y = max(0, (int(self.world_y) - 1) // 2)
 
         # Update bobbing
         if moved:
@@ -322,12 +240,12 @@ class Player3D:
         """Get current world position"""
         return self.world_x, self.world_y
 
-    def set_position(self, x, y):
-        """Set world position"""
-        self.world_x = x + 0.5
-        self.world_y = y + 0.5
-        self.grid_x = x
-        self.grid_y = y
+    def set_position(self, cell_x, cell_y):
+        """Set position from maze cell coordinates"""
+        self.world_x = 2.0 * cell_x + 1.5
+        self.world_y = 2.0 * cell_y + 1.5
+        self.grid_x = cell_x
+        self.grid_y = cell_y
         self._clamp_pitch()
 
     def get_angle_degrees(self):
@@ -336,14 +254,17 @@ class Player3D:
 
     def look_at(self, target_x, target_y):
         """
-        Set angle to look at target position
+        Set angle to look at target position (cell coordinates)
 
         Args:
-            target_x, target_y: Target coordinates
+            target_x, target_y: Target cell coordinates
         """
-        dx = target_x - self.world_x
-        dy = target_y - self.world_y
+        # Convert target to grid coords
+        tx = 2.0 * target_x + 1.5
+        ty = 2.0 * target_y + 1.5
+        dx = tx - self.world_x
+        dy = ty - self.world_y
         self.angle = math.atan2(dy, dx)
 
     def __repr__(self):
-        return f"Player3D(pos=({self.world_x:.2f}, {self.world_y:.2f}), angle={math.degrees(self.angle):.1f}°)"
+        return f"Player3D(pos=({self.world_x:.2f}, {self.world_y:.2f}), cell=({self.grid_x}, {self.grid_y}), angle={math.degrees(self.angle):.1f})"

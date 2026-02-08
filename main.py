@@ -43,7 +43,10 @@ from utils.colors import (
 from config import GAME_TITLE, GAME_VERSION
 
 # 3D Renderer imports
-from renderer3d import Raycaster, Player3D, Renderer3D, TextureManager, Minimap3D, WALL_HALF_THICKNESS
+from renderer3d import Raycaster, Player3D, Renderer3D, TextureManager, Minimap3D
+
+# 2D devor qalinligi (2D maze chizish uchun)
+_2D_WALL_HALF_THICKNESS = 0.2
 
 WINDOWSIZECHANGED_EVENT = getattr(pygame, "WINDOWSIZECHANGED", None)
 WINDOWRESIZED_EVENT = getattr(pygame, "WINDOWRESIZED", None)
@@ -889,7 +892,7 @@ class MazeGame:
             turn = 1
 
         # Apply movement
-        moved = self.player_3d.move(forward, strafe, level.walls, level.cols, level.rows, dt)
+        moved = self.player_3d.move(forward, strafe, level.grid, level.grid_cols, level.grid_rows, dt)
 
         # Apply keyboard turning
         if turn != 0:
@@ -1220,7 +1223,7 @@ class MazeGame:
         min_x, max_x, min_y, max_y = self.camera_manager.get_visible_range()
 
         # Devor qalinligi — 3D bilan sinxron
-        wall_w = max(3, round(2 * WALL_HALF_THICKNESS * self.cell_size))
+        wall_w = max(3, round(2 * _2D_WALL_HALF_THICKNESS * self.cell_size))
         half_w = wall_w // 2
 
         for y in range(min_y, max_y):
@@ -1257,7 +1260,7 @@ class MazeGame:
             return
 
         # Qalin devorlar bilan overlap bo'lmasligi uchun min padding
-        min_pad = max(3, round(2 * WALL_HALF_THICKNESS * self.cell_size)) // 2 + 1
+        min_pad = max(3, round(2 * _2D_WALL_HALF_THICKNESS * self.cell_size)) // 2 + 1
         if pad < min_pad:
             pad = min_pad
 
@@ -1332,7 +1335,7 @@ class MazeGame:
         pad = int(3 * boss.size_multiplier)
 
         # Qalin devorlar bilan overlap bo'lmasligi uchun min padding
-        min_pad = max(3, round(2 * WALL_HALF_THICKNESS * self.cell_size)) // 2 + 1
+        min_pad = max(3, round(2 * _2D_WALL_HALF_THICKNESS * self.cell_size)) // 2 + 1
         if pad < min_pad:
             pad = min_pad
 
@@ -1405,7 +1408,7 @@ class MazeGame:
 
             # Draw border — qalin devorlar bilan sinxron padding
             sx, sy = self.camera_manager.world_to_screen(wall.x, wall.y)
-            bpad = max(3, round(2 * WALL_HALF_THICKNESS * self.cell_size)) // 2 + 1
+            bpad = max(3, round(2 * _2D_WALL_HALF_THICKNESS * self.cell_size)) // 2 + 1
             rx = sx + bpad
             ry = sy + bpad
             rw = self.cell_size - bpad * 2

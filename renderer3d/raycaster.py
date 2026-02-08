@@ -6,177 +6,121 @@ Optimized with Numba JIT compilation
 
 import math
 import numpy as np
-import numba
-from numba import njit, float64, int32, int64
+from numba import njit, float64, int32
 from utils.constants import TOP, RIGHT, BOTTOM, LEFT
-from .blockmap import walls_to_blockmap, pos_to_blockmap, blockmap_cast_all_rays
-
-# Wall bit constants as module-level for Numba access
-_TOP = int32(TOP)
-_RIGHT = int32(RIGHT)
-_BOTTOM = int32(BOTTOM)
-_LEFT = int32(LEFT)
 
 
 @njit(cache=True)
-def _numba_cast_all_rays(walls, cols, rows, px, py, player_angle,
-                         fov_rad, half_fov_rad, num_rays, fish_eye_table):
+def _numba_cast_all_rays_grid(grid, grid_rows, grid_cols,
+                               px, py, ray_angles, fish_eye_table, results):
     """
-    Cast all rays using DDA algorithm (Numba JIT compiled)
+    Grid ustida oddiy DDA ray casting (lodev.org standarti).
 
     Args:
-        walls: 1D numpy int32 array of wall bitmasks
-        cols, rows: Maze dimensions
-        px, py: Player position (float)
-        player_angle: Player view angle in radians
-        fov_rad: Field of view in radians
-        half_fov_rad: Half FOV in radians
-        num_rays: Number of rays to cast
-        fish_eye_table: 1D numpy float64 array of fish-eye correction factors
-
-    Returns:
-        results: numpy array shape (num_rays, 6)
-                 [dist, side, hit_x, hit_y, wall_dir, corrected_dist]
+        grid: 2D int8 massiv (grid_rows, grid_cols), 1=solid, 0=bo'sh
+        grid_rows, grid_cols: grid o'lchamlari
+        px, py: o'yinchi pozitsiyasi grid koordinatalarida
+        ray_angles: 1D float64 massiv — har bir nurning burchagi
+        fish_eye_table: 1D float64 massiv — baliq ko'zi korreksiyasi
+        results: (num_rays, 6) float64 massiv — natija yoziladigan joy
     """
-    results = np.empty((num_rays, 6), dtype=np.float64)
-
-    angle_step = fov_rad / num_rays
-    start_angle = player_angle - half_fov_rad
-
     top = int32(1)
     right = int32(2)
     bottom = int32(4)
     left = int32(8)
 
-    two_pi = 2.0 * math.pi
+    for i in range(len(ray_angles)):
+        angle = ray_angles[i]
+        ray_dir_x = math.cos(angle)
+        ray_dir_y = math.sin(angle)
 
-    for i in range(num_rays):
-        ray_angle = start_angle + i * angle_step
-
-        # --- Inline cast_ray DDA ---
-        ray_dir_x = math.cos(ray_angle)
-        ray_dir_y = math.sin(ray_angle)
-
-        # Avoid division by zero
-        if abs(ray_dir_x) < 1e-10:
-            if ray_dir_x >= 0:
-                ray_dir_x = 1e-10
-            else:
-                ray_dir_x = -1e-10
-        if abs(ray_dir_y) < 1e-10:
-            if ray_dir_y >= 0:
-                ray_dir_y = 1e-10
-            else:
-                ray_dir_y = -1e-10
-
-        # Current cell
-        map_x = int32(int(px))
-        map_y = int32(int(py))
+        map_x = int32(px)
+        map_y = int32(py)
 
         # Delta distances
-        delta_dist_x = abs(1.0 / ray_dir_x)
-        delta_dist_y = abs(1.0 / ray_dir_y)
-
-        # Step direction
-        if ray_dir_x >= 0:
-            step_x = int32(1)
-            side_dist_x = (map_x + 1.0 - px) * delta_dist_x
+        if abs(ray_dir_x) < 1e-10:
+            delta_x = float64(1e10)
         else:
+            delta_x = abs(1.0 / ray_dir_x)
+        if abs(ray_dir_y) < 1e-10:
+            delta_y = float64(1e10)
+        else:
+            delta_y = abs(1.0 / ray_dir_y)
+
+        # Step va initial side distances
+        if ray_dir_x < 0:
             step_x = int32(-1)
-            side_dist_x = (px - map_x) * delta_dist_x
-
-        if ray_dir_y >= 0:
-            step_y = int32(1)
-            side_dist_y = (map_y + 1.0 - py) * delta_dist_y
+            side_dist_x = (px - map_x) * delta_x
         else:
+            step_x = int32(1)
+            side_dist_x = (map_x + 1.0 - px) * delta_x
+        if ray_dir_y < 0:
             step_y = int32(-1)
-            side_dist_y = (py - map_y) * delta_dist_y
+            side_dist_y = (py - map_y) * delta_y
+        else:
+            step_y = int32(1)
+            side_dist_y = (map_y + 1.0 - py) * delta_y
 
         # DDA loop
-        hit = False
         side = int32(0)
-        wall_dir = top
-        max_distance = 100.0
-
-        while not hit:
+        hit = False
+        for _ in range(200):  # max steps
             if side_dist_x < side_dist_y:
-                side_dist_x += delta_dist_x
+                side_dist_x += delta_x
                 map_x += step_x
-                side = int32(1)  # E/W wall
-                if step_x > 0:
-                    wall_dir = left
-                else:
-                    wall_dir = right
+                side = int32(1)  # E/W face
             else:
-                side_dist_y += delta_dist_y
+                side_dist_y += delta_y
                 map_y += step_y
-                side = int32(0)  # N/S wall
-                if step_y > 0:
-                    wall_dir = top
-                else:
-                    wall_dir = bottom
+                side = int32(0)  # N/S face
 
-            # Out of bounds check
-            if map_x < 0 or map_x >= cols or map_y < 0 or map_y >= rows:
+            if map_x < 0 or map_x >= grid_cols or map_y < 0 or map_y >= grid_rows:
+                break
+            if grid[map_y, map_x] != 0:
                 hit = True
                 break
 
-            # Check wall (inline check_wall)
-            idx = map_y * cols + map_x
-            if idx < 0 or idx >= walls.shape[0]:
-                hit = True
-                break
-
-            w = walls[idx]
-
-            if side == 1:  # Horizontal movement
-                if step_x > 0:
-                    if (w & left) != 0:
-                        hit = True
-                        wall_dir = left
-                else:
-                    if (w & right) != 0:
-                        hit = True
-                        wall_dir = right
-            else:  # Vertical movement
-                if step_y > 0:
-                    if (w & top) != 0:
-                        hit = True
-                        wall_dir = top
-                else:
-                    if (w & bottom) != 0:
-                        hit = True
-                        wall_dir = bottom
-
-            # Max distance safety
-            if side == 1:
-                dist_check = side_dist_x
-            else:
-                dist_check = side_dist_y
-            if dist_check > max_distance:
-                break
-
-        # Calculate perpendicular distance
+        # Perpendicular distance (lodev formula)
         if side == 1:
-            perp_wall_dist = side_dist_x - delta_dist_x
+            perp = side_dist_x - delta_x
         else:
-            perp_wall_dist = side_dist_y - delta_dist_y
+            perp = side_dist_y - delta_y
+        if perp < 0.01:
+            perp = 0.01
 
-        # Hit point
-        hit_x = px + perp_wall_dist * ray_dir_x
-        hit_y = py + perp_wall_dist * ray_dir_y
+        # Hit point (textura uchun)
+        if side == 1:
+            hit_y_val = py + perp * ray_dir_y
+            if step_x > 0:
+                hit_x_val = float64(map_x)
+            else:
+                hit_x_val = float64(map_x + 1)
+        else:
+            hit_x_val = px + perp * ray_dir_x
+            if step_y > 0:
+                hit_y_val = float64(map_y)
+            else:
+                hit_y_val = float64(map_y + 1)
 
-        # Fish-eye correction
-        corrected_dist = perp_wall_dist * fish_eye_table[i]
+        # Wall direction
+        if side == 1:
+            if step_x > 0:
+                wall_dir = left   # 8 — devorning chap yuzi
+            else:
+                wall_dir = right  # 2 — devorning o'ng yuzi
+        else:
+            if step_y > 0:
+                wall_dir = top      # 1 — devorning yuqori yuzi
+            else:
+                wall_dir = bottom   # 4 — devorning pastki yuzi
 
-        results[i, 0] = perp_wall_dist
+        corrected = perp * fish_eye_table[i]
+        results[i, 0] = perp
         results[i, 1] = float64(side)
-        results[i, 2] = hit_x
-        results[i, 3] = hit_y
+        results[i, 2] = hit_x_val
+        results[i, 3] = hit_y_val
         results[i, 4] = float64(wall_dir)
-        results[i, 5] = corrected_dist
-
-    return results
+        results[i, 5] = corrected
 
 
 class Raycaster:
@@ -195,13 +139,8 @@ class Raycaster:
         # Fish-eye correction table as numpy array
         self._fish_eye_table = self._build_fisheye_table(num_rays, fov)
 
-        # Cached walls array
-        self._walls_cache = None
-        self._walls_id = None
-
-        # Blockmap cache
-        self._blockmap_cache = None
-        self._blockmap_walls_hash = None
+        # Pre-allocated results array
+        self._results = np.empty((num_rays, 6), dtype=np.float64)
 
     @staticmethod
     def _build_fisheye_table(num_rays, fov):
@@ -215,33 +154,35 @@ class Raycaster:
         if num_rays != self.num_rays:
             self.num_rays = num_rays
             self._fish_eye_table = self._build_fisheye_table(num_rays, self.fov)
+            self._results = np.empty((num_rays, 6), dtype=np.float64)
 
-    def _get_walls_array(self, walls):
-        """Convert walls to numpy int32 array (with caching)"""
-        walls_id = id(walls)
-        if self._walls_id != walls_id or self._walls_cache is None:
-            if isinstance(walls, np.ndarray):
-                self._walls_cache = walls.astype(np.int32)
-            else:
-                self._walls_cache = np.array(walls, dtype=np.int32)
-            self._walls_id = walls_id
-        return self._walls_cache
-
-    def cast_all_rays(self, walls, cols, rows, px, py, player_angle):
+    def cast_all_rays_grid(self, grid, grid_rows, grid_cols, px, py, player_angle):
         """
-        Cast all rays for the screen using Numba JIT
+        Grid ustida DDA bilan nurlarni otish.
+
+        Args:
+            grid: 2D int8 massiv — walls_to_blockmap() natijasi
+            grid_rows, grid_cols: grid o'lchamlari
+            px, py: o'yinchi pozitsiyasi grid koordinatalarida
+            player_angle: o'yinchining ko'rish burchagi (radyan)
 
         Returns:
             numpy array shape (num_rays, 6):
             [dist, side, hit_x, hit_y, wall_dir, corrected_dist]
         """
-        walls_arr = self._get_walls_array(walls)
-        return _numba_cast_all_rays(
-            walls_arr, int32(cols), int32(rows),
-            float64(px), float64(py), float64(player_angle),
-            float64(self.fov_rad), float64(self.half_fov_rad),
-            int32(self.num_rays), self._fish_eye_table
+        # Ray angles massivini hisoblash
+        angle_step = self.fov_rad / self.num_rays
+        start_angle = player_angle - self.half_fov_rad
+        ray_angles = np.empty(self.num_rays, dtype=np.float64)
+        for i in range(self.num_rays):
+            ray_angles[i] = start_angle + i * angle_step
+
+        _numba_cast_all_rays_grid(
+            grid, int32(grid_rows), int32(grid_cols),
+            float64(px), float64(py),
+            ray_angles, self._fish_eye_table, self._results
         )
+        return self._results
 
     def check_wall(self, walls, cols, rows, cell_x, cell_y, direction):
         """
@@ -273,46 +214,6 @@ class Raycaster:
             return (w & direction) != 0
 
         return False
-
-    def _get_blockmap(self, walls, cols, rows):
-        """Blok xarita yaratish (kesh bilan)"""
-        walls_arr = self._get_walls_array(walls)
-        walls_hash = hash(walls_arr.data.tobytes())
-        if self._blockmap_walls_hash != walls_hash or self._blockmap_cache is None:
-            self._blockmap_cache = walls_to_blockmap(walls_arr, int32(cols), int32(rows))
-            self._blockmap_walls_hash = walls_hash
-        return self._blockmap_cache
-
-    def invalidate_blockmap(self):
-        """Blok xarita keshini tozalash"""
-        self._blockmap_cache = None
-        self._blockmap_walls_hash = None
-
-    def cast_all_rays_blockmap(self, walls, cols, rows, px, py, player_angle):
-        """
-        Blok xarita orqali nurlarni otish.
-        Devorlar qalin ko'rinadi — har bir devor segmenti to'liq katakcha.
-
-        Returns:
-            numpy array shape (num_rays, 6):
-            [dist, side, hit_x, hit_y, wall_dir, corrected_dist]
-        """
-        blockmap = self._get_blockmap(walls, cols, rows)
-        bm_h, bm_w = blockmap.shape
-
-        # O'yinchi pozitsiyasini blok xarita koordinatalariga o'tkazish
-        bpx, bpy = pos_to_blockmap(float64(px), float64(py))
-
-        walls_arr = self._get_walls_array(walls)
-        return blockmap_cast_all_rays(
-            blockmap, int32(bm_w), int32(bm_h),
-            float64(bpx), float64(bpy),
-            float64(px), float64(py),
-            float64(player_angle),
-            float64(self.fov_rad), float64(self.half_fov_rad),
-            int32(self.num_rays), self._fish_eye_table,
-            walls_arr, int32(cols), int32(rows)
-        )
 
     @staticmethod
     def get_wall_texture_x(hit_x, hit_y, side, wall_dir):

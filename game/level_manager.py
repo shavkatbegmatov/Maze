@@ -19,6 +19,7 @@ from entities.trap import TrapManager
 from entities.door import DoorManager
 from entities.moving_wall import MovingWallManager, spawn_moving_walls
 from entities.boss import BossManager
+from renderer3d.blockmap import walls_to_blockmap
 
 
 class Level:
@@ -39,6 +40,11 @@ class Level:
         self.walls = None
         self.cols = self.config.cols
         self.rows = self.config.rows
+
+        # Grid data (blockmap)
+        self.grid = None
+        self.grid_rows = 0
+        self.grid_cols = 0
 
         # Positions
         self.start_pos = (0, 0)
@@ -86,6 +92,7 @@ class Level:
 
             self.walls = last_state['walls']
             self._apply_braiding()
+            self._build_grid()
             self._spawn_entities()
             self.generation_complete = True
             return None
@@ -99,6 +106,7 @@ class Level:
         """
         self.walls = walls
         self._apply_braiding()
+        self._build_grid()
         self._spawn_entities()
         self.generation_complete = True
         self.generating = False
@@ -107,6 +115,13 @@ class Level:
         """Apply braiding (add loops) to maze"""
         if self.config.braid_chance > 0:
             braid_maze(self.walls, self.cols, self.rows, self.config.braid_chance)
+
+    def _build_grid(self):
+        """Build grid (blockmap) from walls"""
+        import numpy as np
+        walls_arr = np.array(self.walls, dtype=np.int32)
+        self.grid = walls_to_blockmap(walls_arr, self.cols, self.rows)
+        self.grid_rows, self.grid_cols = self.grid.shape
 
     def _spawn_entities(self):
         """Spawn all entities in the maze"""
@@ -189,6 +204,10 @@ class Level:
         self.trap_manager.update(dt)
         self.door_manager.update(dt)
         self.moving_wall_manager.update(dt)
+
+        # Moving wall o'zgarganda grid qayta hisoblash
+        if self.moving_wall_manager.walls:
+            self._build_grid()
 
         # Check moving wall collision with player
         if self.moving_wall_manager.is_blocked(self.player.x, self.player.y):
