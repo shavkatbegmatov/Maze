@@ -370,8 +370,7 @@ class MazeGame:
             self._release_mouse()
             self.game_flow.pause_game()
         elif key == pygame.K_r:
-            self.game_flow.retry_level()
-            self._grab_mouse()
+            self.weapon.start_reload()
         elif key == pygame.K_F5:
             self._quick_save()
         elif key == pygame.K_F9:
@@ -480,7 +479,8 @@ class MazeGame:
             success = self.save_manager.save_game(
                 level, level.player, self.state_manager, "quicksave",
                 game_mode=self.game_mode,
-                player_3d=self.player_3d
+                player_3d=self.player_3d,
+                weapon=self.weapon
             )
             if success:
                 self._show_message("Game Saved! (F9 to load)")
@@ -537,6 +537,13 @@ class MazeGame:
                     self._release_mouse()
                     self._resize_screen_for_level(level)
                     self.state_manager.transition_to(GameState.PLAYING)
+
+                # Weapon ammo tiklash
+                weapon_data = extra_data.get('weapon')
+                if weapon_data:
+                    from utils.constants import AMMO_START_MAGAZINE, AMMO_START_RESERVE
+                    self.weapon.magazine_ammo = weapon_data.get('magazine_ammo', AMMO_START_MAGAZINE)
+                    self.weapon.reserve_ammo = weapon_data.get('reserve_ammo', AMMO_START_RESERVE)
 
                 self._show_message("Game Loaded!")
             else:
@@ -755,11 +762,8 @@ class MazeGame:
         if not level or not self.player_3d:
             return
 
-        if not self.weapon.can_fire(level.player.stats['energy']):
+        if not self.weapon.can_fire():
             return
-
-        # Energiya sarflash
-        level.player.stats['energy'] -= self.weapon.energy_cost
 
         # Otish
         result = self.weapon.fire(
@@ -767,6 +771,8 @@ class MazeGame:
             level.enemy_manager, level.boss_manager,
             level.grid, level.grid_cols, level.grid_rows
         )
+
+        self.weapon.trail_hit = result['hit']
 
         if result['hit']:
             if result['enemy']:
@@ -974,6 +980,9 @@ class MazeGame:
 
         # Apply movement
         moved = self.player_3d.move(forward, strafe, level.grid, level.grid_cols, level.grid_rows, dt)
+
+        # Bob/sway — qurolga harakatlanish holatini bildirish
+        self.weapon.set_moving(forward != 0 or strafe != 0)
 
         # Apply keyboard turning
         if turn != 0:
@@ -1270,11 +1279,12 @@ class MazeGame:
         self.combat_manager.draw_damage_overlay(self.screen, self.screen_w, render_h)
         self.weapon.draw_gun(self.screen, self.screen_w, render_h)
         self.weapon.draw_muzzle_flash(self.screen, self.screen_w, render_h)
+        self.weapon.draw_bullet_trail(self.screen, self.screen_w, render_h)
         self.weapon.draw_hit_marker(self.screen, self.screen_w, render_h)
 
         # Draw HUD
         self.ui_manager.draw_hud_3d(
-            self.screen, level.player, level, self.screen_h
+            self.screen, level.player, level, self.screen_h, weapon=self.weapon
         )
 
         # Draw save/load message

@@ -56,10 +56,6 @@ class Player:
         Move player in direction (dx, dy)
         Returns True if move was successful
         """
-        # Check energy
-        if self.stats['energy'] < PLAYER_ENERGY_COST_MOVE:
-            return False
-
         # Check confusion effect (reverses controls)
         if self.has_effect('confusion'):
             dx, dy = -dx, -dy
@@ -74,14 +70,6 @@ class Player:
             # Limit trail length
             if len(self.trail) > self.max_trail_length:
                 self.trail.pop(0)
-
-            # Consume energy (affected by slow effect)
-            energy_cost = PLAYER_ENERGY_COST_MOVE
-            if self.has_effect('slow'):
-                energy_cost *= 1.5
-
-            self.stats['energy'] -= energy_cost
-            self.stats['energy'] = max(0, self.stats['energy'])
 
             self.moves += 1
             return True

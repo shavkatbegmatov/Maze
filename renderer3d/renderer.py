@@ -304,6 +304,9 @@ class Renderer3D:
         # Z-buffer for sprite sorting
         self.z_buffer = np.full(screen_width, float('inf'), dtype=np.float32)
 
+        # Sprite FOV korreksiya koeffitsienti
+        self._sprite_fov_factor = 1.0 / math.tan(self.raycaster.half_fov_rad)
+
         # Pre-rendered sprite surfaces
         self._sprite_cache = {}
         self._init_sprite_surfaces()
@@ -311,15 +314,16 @@ class Renderer3D:
     def _init_sprite_surfaces(self):
         """Pre-render sprite surfaces for fast blitting"""
         sprite_size = 64
+        enemy_sprite_size = 128
 
         # Goal - green circle
         self._sprite_cache['goal'] = self._create_circle_surface(sprite_size, COLOR_GOAL)
 
-        # Enemies - diamond shapes
-        self._sprite_cache['enemy_patrol'] = self._create_diamond_surface(sprite_size, COLOR_ENEMY_PATROL)
-        self._sprite_cache['enemy_chase'] = self._create_diamond_surface(sprite_size, COLOR_ENEMY_CHASE)
-        self._sprite_cache['enemy_teleport'] = self._create_diamond_surface(sprite_size, COLOR_ENEMY_TELEPORT)
-        self._sprite_cache['enemy_smart'] = self._create_diamond_surface(sprite_size, COLOR_ENEMY_SMART)
+        # Enemies - humanoid shapes
+        self._sprite_cache['enemy_patrol'] = self._create_patrol_sprite(enemy_sprite_size)
+        self._sprite_cache['enemy_chase'] = self._create_chase_sprite(enemy_sprite_size)
+        self._sprite_cache['enemy_teleport'] = self._create_teleport_sprite(enemy_sprite_size)
+        self._sprite_cache['enemy_smart'] = self._create_smart_sprite(enemy_sprite_size)
 
         # Power-ups - small circles
         self._sprite_cache['powerup_speed'] = self._create_circle_surface(sprite_size, COLOR_POWERUP_SPEED)
@@ -380,6 +384,212 @@ class Renderer3D:
             y = cy + int(r * math.sin(angle))
             points.append((x, y))
         pygame.draw.polygon(surface, color, points)
+        return surface
+
+    def _create_humanoid_base(self, size, body_color, head_color, detail_color, eye_color):
+        """Asosiy humanoid sprite yaratish"""
+        surface = pygame.Surface((size, size), pygame.SRCALPHA)
+        cx = size // 2
+        s = size / 128.0  # scale factor
+
+        # === OYOQLAR ===
+        leg_w = int(12 * s)
+        leg_h = int(30 * s)
+        leg_y = int(90 * s)
+        # Chap oyoq
+        pygame.draw.rect(surface, body_color,
+                         (cx - int(16 * s), leg_y, leg_w, leg_h), border_radius=int(3 * s))
+        # O'ng oyoq
+        pygame.draw.rect(surface, body_color,
+                         (cx + int(4 * s), leg_y, leg_w, leg_h), border_radius=int(3 * s))
+        # Oyoq tubi (etik)
+        boot_color = (max(0, body_color[0] - 30), max(0, body_color[1] - 30), max(0, body_color[2] - 30))
+        pygame.draw.rect(surface, boot_color,
+                         (cx - int(18 * s), leg_y + leg_h - int(8 * s), int(14 * s), int(8 * s)),
+                         border_radius=int(2 * s))
+        pygame.draw.rect(surface, boot_color,
+                         (cx + int(2 * s), leg_y + leg_h - int(8 * s), int(14 * s), int(8 * s)),
+                         border_radius=int(2 * s))
+
+        # === TANA (trapezoid) ===
+        body_top_y = int(45 * s)
+        body_bot_y = int(92 * s)
+        body_points = [
+            (cx - int(18 * s), body_top_y),
+            (cx + int(18 * s), body_top_y),
+            (cx + int(22 * s), body_bot_y),
+            (cx - int(22 * s), body_bot_y),
+        ]
+        pygame.draw.polygon(surface, body_color, body_points)
+
+        # Tana o'rta chizig'i (detail)
+        pygame.draw.line(surface, detail_color,
+                         (cx, body_top_y + int(5 * s)), (cx, body_bot_y - int(5 * s)), int(2 * s))
+
+        # === QO'LLAR ===
+        arm_w = int(10 * s)
+        arm_h = int(35 * s)
+        arm_y = int(48 * s)
+        # Chap qo'l
+        pygame.draw.rect(surface, body_color,
+                         (cx - int(28 * s), arm_y, arm_w, arm_h), border_radius=int(3 * s))
+        # O'ng qo'l
+        pygame.draw.rect(surface, body_color,
+                         (cx + int(18 * s), arm_y, arm_w, arm_h), border_radius=int(3 * s))
+
+        # === BOSH ===
+        head_r = int(16 * s)
+        head_cy = int(30 * s)
+        pygame.draw.circle(surface, head_color, (cx, head_cy), head_r)
+
+        # === KO'ZLAR (yonuvchi nuqtalar + porlash) ===
+        eye_y = head_cy - int(2 * s)
+        eye_spacing = int(8 * s)
+        eye_r = int(4 * s)
+        glow_r = int(6 * s)
+
+        # Porlash (glow)
+        glow_color = (eye_color[0], eye_color[1], eye_color[2], 80)
+        glow_surf = pygame.Surface((glow_r * 2, glow_r * 2), pygame.SRCALPHA)
+        pygame.draw.circle(glow_surf, glow_color, (glow_r, glow_r), glow_r)
+        surface.blit(glow_surf, (cx - eye_spacing - glow_r, eye_y - glow_r))
+        surface.blit(glow_surf, (cx + eye_spacing - glow_r, eye_y - glow_r))
+
+        # Ko'z nuqtalari
+        pygame.draw.circle(surface, eye_color, (cx - eye_spacing, eye_y), eye_r)
+        pygame.draw.circle(surface, (255, 255, 255), (cx - eye_spacing, eye_y), int(2 * s))
+        pygame.draw.circle(surface, eye_color, (cx + eye_spacing, eye_y), eye_r)
+        pygame.draw.circle(surface, (255, 255, 255), (cx + eye_spacing, eye_y), int(2 * s))
+
+        return surface
+
+    def _create_patrol_sprite(self, size):
+        """Patrol dushman — yashil kiyim, helmet"""
+        body_color = (60, 120, 60)
+        head_color = (80, 140, 80)
+        detail_color = (40, 90, 40)
+        eye_color = (200, 255, 200)
+
+        surface = self._create_humanoid_base(size, body_color, head_color, detail_color, eye_color)
+        cx = size // 2
+        s = size / 128.0
+
+        # Helmet
+        helmet_color = (70, 100, 70)
+        head_cy = int(30 * s)
+        head_r = int(16 * s)
+        # Helmet tepa qismi
+        pygame.draw.arc(surface, helmet_color,
+                        (cx - head_r - int(2 * s), head_cy - head_r - int(4 * s),
+                         head_r * 2 + int(4 * s), head_r + int(8 * s)),
+                        0, math.pi, int(3 * s))
+        # Helmet brim
+        pygame.draw.line(surface, helmet_color,
+                         (cx - head_r - int(4 * s), head_cy - int(4 * s)),
+                         (cx + head_r + int(4 * s), head_cy - int(4 * s)), int(3 * s))
+
+        return surface
+
+    def _create_chase_sprite(self, size):
+        """Chase dushman — qizil, shoxlar, sariq ko'zlar"""
+        body_color = (160, 50, 50)
+        head_color = (140, 40, 40)
+        detail_color = (100, 30, 30)
+        eye_color = (255, 220, 50)
+
+        surface = self._create_humanoid_base(size, body_color, head_color, detail_color, eye_color)
+        cx = size // 2
+        s = size / 128.0
+
+        # Shoxlar
+        head_cy = int(30 * s)
+        head_r = int(16 * s)
+        horn_color = (120, 40, 40)
+        # Chap shox
+        pygame.draw.polygon(surface, horn_color, [
+            (cx - int(12 * s), head_cy - head_r + int(4 * s)),
+            (cx - int(20 * s), head_cy - head_r - int(14 * s)),
+            (cx - int(6 * s), head_cy - head_r + int(2 * s)),
+        ])
+        # O'ng shox
+        pygame.draw.polygon(surface, horn_color, [
+            (cx + int(12 * s), head_cy - head_r + int(4 * s)),
+            (cx + int(20 * s), head_cy - head_r - int(14 * s)),
+            (cx + int(6 * s), head_cy - head_r + int(2 * s)),
+        ])
+
+        return surface
+
+    def _create_teleport_sprite(self, size):
+        """Teleport dushman — binafsha, nurli aura"""
+        body_color = (120, 60, 160)
+        head_color = (100, 50, 140)
+        detail_color = (80, 40, 120)
+        eye_color = (200, 150, 255)
+
+        surface = self._create_humanoid_base(size, body_color, head_color, detail_color, eye_color)
+        cx = size // 2
+        s = size / 128.0
+
+        # Nurli aura — atrofida yaltiroq chiziqlar
+        aura_color = (180, 120, 255, 60)
+        aura_r = int(50 * s)
+        aura_surf = pygame.Surface((aura_r * 2, aura_r * 2), pygame.SRCALPHA)
+        pygame.draw.circle(aura_surf, aura_color, (aura_r, aura_r), aura_r)
+        # Ichki qism tozalash
+        inner_r = int(35 * s)
+        pygame.draw.circle(aura_surf, (0, 0, 0, 0), (aura_r, aura_r), inner_r)
+        surface.blit(aura_surf, (cx - aura_r, int(55 * s) - aura_r))
+
+        # Yulduz nurlar
+        star_color = (200, 160, 255, 120)
+        for angle_deg in range(0, 360, 45):
+            angle = math.radians(angle_deg)
+            r1 = int(40 * s)
+            r2 = int(48 * s)
+            x1 = cx + int(r1 * math.cos(angle))
+            y1 = int(55 * s) + int(r1 * math.sin(angle))
+            x2 = cx + int(r2 * math.cos(angle))
+            y2 = int(55 * s) + int(r2 * math.sin(angle))
+            line_surf = pygame.Surface((size, size), pygame.SRCALPHA)
+            pygame.draw.line(line_surf, star_color, (x1, y1), (x2, y2), int(2 * s))
+            surface.blit(line_surf, (0, 0))
+
+        return surface
+
+    def _create_smart_sprite(self, size):
+        """Smart dushman — to'q ko'k, medal, epoletlar"""
+        body_color = (40, 60, 120)
+        head_color = (50, 70, 130)
+        detail_color = (30, 45, 90)
+        eye_color = (100, 180, 255)
+
+        surface = self._create_humanoid_base(size, body_color, head_color, detail_color, eye_color)
+        cx = size // 2
+        s = size / 128.0
+
+        # Epoletlar (yelka ustida)
+        epaulet_color = (60, 80, 150)
+        ep_y = int(44 * s)
+        ep_w = int(14 * s)
+        ep_h = int(6 * s)
+        # Chap yelka
+        pygame.draw.rect(surface, epaulet_color,
+                         (cx - int(28 * s), ep_y, ep_w, ep_h), border_radius=int(2 * s))
+        pygame.draw.rect(surface, (200, 180, 50),
+                         (cx - int(28 * s), ep_y, ep_w, int(2 * s)))
+        # O'ng yelka
+        pygame.draw.rect(surface, epaulet_color,
+                         (cx + int(14 * s), ep_y, ep_w, ep_h), border_radius=int(2 * s))
+        pygame.draw.rect(surface, (200, 180, 50),
+                         (cx + int(14 * s), ep_y, ep_w, int(2 * s)))
+
+        # Medal (ko'krak)
+        medal_y = int(60 * s)
+        medal_r = int(5 * s)
+        pygame.draw.circle(surface, (220, 200, 60), (cx, medal_y), medal_r)
+        pygame.draw.circle(surface, (255, 230, 80), (cx, medal_y), int(3 * s))
+
         return surface
 
     def set_render_area(self, width, height):
@@ -491,7 +701,7 @@ class Renderer3D:
                 surface = self._sprite_cache.get(cache_key, self._sprite_cache['enemy_patrol'])
                 sprite_data = {
                     'x': 2 * enemy.x + 1.5, 'y': 2 * enemy.y + 1.5,
-                    'surface': surface, 'size': 0.5
+                    'surface': surface, 'size': 0.8
                 }
                 # Death animatsiya — kichrayish va so'lish
                 if not enemy.alive and enemy.death_timer > 0:
@@ -576,22 +786,15 @@ class Renderer3D:
         # Transform to player view space
         cos_a = math.cos(p_angle)
         sin_a = math.sin(p_angle)
-        cos_a_perp = math.cos(p_angle + math.pi / 2)
-        sin_a_perp = math.sin(p_angle + math.pi / 2)
 
-        det = cos_a_perp * sin_a - sin_a_perp * cos_a
-        if abs(det) < 0.0001:
-            return
-
-        inv_det = 1.0 / det
-        transform_x = inv_det * (cos_a_perp * dx - cos_a * dy)
-        transform_y = inv_det * (-sin_a_perp * dx + sin_a * dy)
+        transform_x = -sin_a * dx + cos_a * dy
+        transform_y = cos_a * dx + sin_a * dy
 
         if transform_y <= 0.1:
             return  # Behind player
 
-        # Calculate screen position (horizontal)
-        sprite_screen_x = int((self.screen_width / 2) * (1 + transform_x / transform_y))
+        # Calculate screen position (FOV korreksiyali)
+        sprite_screen_x = int((self.screen_width / 2) * (1 + transform_x / transform_y * self._sprite_fov_factor))
 
         # Y-shearing for sprite
         h = self.render_height
@@ -604,6 +807,10 @@ class Renderer3D:
 
         if sprite_width <= 0 or sprite_height <= 0:
             return
+
+        # Minimal sprite size
+        sprite_height = max(sprite_height, 8)
+        sprite_width = max(sprite_width, 8)
 
         # Clamp size
         sprite_width = min(sprite_width, self.screen_width * 2)
@@ -631,8 +838,11 @@ class Renderer3D:
         if not visible:
             return
 
-        # Scale sprite surface
-        scaled = pygame.transform.scale(sprite['surface'], (sprite_width, sprite_height))
+        # Scale sprite surface (smoothscale for better quality at small sizes)
+        if sprite_width <= 256 and sprite_height <= 256:
+            scaled = pygame.transform.smoothscale(sprite['surface'], (sprite_width, sprite_height))
+        else:
+            scaled = pygame.transform.scale(sprite['surface'], (sprite_width, sprite_height))
 
         # Apply distance shading
         shade = max(0.3, min(1.0, 1.0 - (dist / 20.0)))
