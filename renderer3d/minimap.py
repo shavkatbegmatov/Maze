@@ -70,15 +70,17 @@ class Minimap3D:
         # Draw background
         pygame.draw.rect(self.surface, self.bg_color, (0, 0, self.width, self.height), border_radius=5)
 
-        # Calculate scale
-        scale_x = (self.width - 10) / level.cols
-        scale_y = (self.height - 20) / level.rows
+        # Grid asosida scale hisoblash
+        # Grid o'lchami: (2*cols+1) x (2*rows+1)
+        grid_w = 2 * level.cols + 1
+        grid_h = 2 * level.rows + 1
+        inner_w = self.width - 10
+        inner_h = self.height - 20
+        scale_x = inner_w / grid_w
+        scale_y = inner_h / grid_h
 
-        # Draw explored areas
-        self._draw_explored_areas(level, fog_manager, scale_x, scale_y)
-
-        # Draw walls (simplified)
-        self._draw_walls(level, fog_manager, scale_x, scale_y)
+        # Draw grid (devorlar va bo'shliqlar kvadrat bloklar sifatida)
+        self._draw_grid(level, fog_manager, scale_x, scale_y)
 
         # Draw goal
         self._draw_goal(level, scale_x, scale_y, fog_manager)
@@ -100,67 +102,36 @@ class Minimap3D:
         # Blit to screen
         screen.blit(self.surface, (x, y))
 
-    def _draw_explored_areas(self, level, fog_manager, scale_x, scale_y):
-        """Draw explored vs unexplored areas"""
+    def _draw_grid(self, level, fog_manager, scale_x, scale_y):
+        """Grid asosida devorlar va bo'shliqlarni kvadrat bloklar sifatida chizish"""
         offset_x = 5
         offset_y = 5
 
-        for y in range(level.rows):
-            for x in range(level.cols):
-                px = int(x * scale_x) + offset_x
-                py = int(y * scale_y) + offset_y
-                pw = max(1, int(scale_x))
-                ph = max(1, int(scale_y))
+        grid = level.grid
+        grid_h, grid_w = grid.shape
+        use_fog = fog_manager and fog_manager.fog and fog_manager.enabled
 
-                # Check if explored
-                if fog_manager and fog_manager.fog and fog_manager.enabled:
-                    if fog_manager.fog.explored[y][x]:
-                        color = self.explored_color
-                    else:
-                        color = self.unexplored_color
-                else:
-                    color = self.explored_color
+        for gy in range(grid_h):
+            for gx in range(grid_w):
+                px = int(gx * scale_x) + offset_x
+                py = int(gy * scale_y) + offset_y
+                pw = max(1, int((gx + 1) * scale_x) - int(gx * scale_x))
+                ph = max(1, int((gy + 1) * scale_y) - int(gy * scale_y))
 
-                pygame.draw.rect(self.surface, color, (px, py, pw, ph))
+                # Grid cell ga mos maze cell (fog tekshirish uchun)
+                cell_x = max(0, (gx - 1) // 2)
+                cell_y = max(0, (gy - 1) // 2)
 
-    def _draw_walls(self, level, fog_manager, scale_x, scale_y):
-        """Draw maze walls on minimap"""
-        from utils.constants import TOP, RIGHT, BOTTOM, LEFT
-
-        offset_x = 5
-        offset_y = 5
-
-        for y in range(level.rows):
-            for x in range(level.cols):
-                # Skip unexplored areas
-                if fog_manager and fog_manager.fog and fog_manager.enabled:
-                    if not fog_manager.fog.explored[y][x]:
-                        continue
-
-                idx = y * level.cols + x
-                if idx >= len(level.walls):
+                if use_fog and not fog_manager.fog.explored[cell_y][cell_x]:
+                    pygame.draw.rect(self.surface, self.unexplored_color, (px, py, pw, ph))
                     continue
 
-                w = level.walls[idx]
-
-                px = int(x * scale_x) + offset_x
-                py = int(y * scale_y) + offset_y
-                pw = max(1, int(scale_x))
-                ph = max(1, int(scale_y))
-
-                # Draw walls as lines
-                if w & TOP:
-                    pygame.draw.line(self.surface, self.wall_color,
-                                     (px, py), (px + pw, py), 1)
-                if w & RIGHT:
-                    pygame.draw.line(self.surface, self.wall_color,
-                                     (px + pw, py), (px + pw, py + ph), 1)
-                if w & BOTTOM:
-                    pygame.draw.line(self.surface, self.wall_color,
-                                     (px, py + ph), (px + pw, py + ph), 1)
-                if w & LEFT:
-                    pygame.draw.line(self.surface, self.wall_color,
-                                     (px, py), (px, py + ph), 1)
+                if grid[gy, gx] != 0:
+                    # Devor — solid blok
+                    pygame.draw.rect(self.surface, self.wall_color, (px, py, pw, ph))
+                else:
+                    # Bo'sh koridor
+                    pygame.draw.rect(self.surface, self.explored_color, (px, py, pw, ph))
 
     def _draw_goal(self, level, scale_x, scale_y, fog_manager):
         """Draw goal position"""
@@ -173,8 +144,9 @@ class Minimap3D:
             if not fog_manager.fog.explored[gy][gx]:
                 return
 
-        px = int((gx + 0.5) * scale_x) + offset_x
-        py = int((gy + 0.5) * scale_y) + offset_y
+        # Cell -> grid markazi: 2*cell + 1.5
+        px = int((2 * gx + 1.5) * scale_x) + offset_x
+        py = int((2 * gy + 1.5) * scale_y) + offset_y
 
         # Pulsing effect
         pulse = 2 + abs(math.sin(pygame.time.get_ticks() * 0.005)) * 2
@@ -191,8 +163,9 @@ class Minimap3D:
                 if not fog_manager.is_visible(enemy.x, enemy.y):
                     continue
 
-            px = int((enemy.x + 0.5) * scale_x) + offset_x
-            py = int((enemy.y + 0.5) * scale_y) + offset_y
+            # Cell -> grid markazi: 2*cell + 1.5
+            px = int((2 * enemy.x + 1.5) * scale_x) + offset_x
+            py = int((2 * enemy.y + 1.5) * scale_y) + offset_y
 
             # Get enemy color
             color = enemy.get_color() if hasattr(enemy, 'get_color') else self.enemy_color
@@ -204,12 +177,9 @@ class Minimap3D:
         offset_x = 5
         offset_y = 5
 
-        # Player position — grid koordinatalaridan cell koordinatalariga
-        # world_x = 2*cell_x + 1.5 => cell_x = (world_x - 1.5) / 2
-        cell_px = (player.world_x - 1.5) / 2.0
-        cell_py = (player.world_y - 1.5) / 2.0
-        px = int(cell_px * scale_x) + offset_x
-        py = int(cell_py * scale_y) + offset_y
+        # Player world pozitsiyasi allaqachon grid koordinatalarida
+        px = int(player.world_x * scale_x) + offset_x
+        py = int(player.world_y * scale_y) + offset_y
 
         # Draw FOV cone
         fov_length = 15
