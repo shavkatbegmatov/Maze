@@ -105,6 +105,13 @@ WEAPON_MAX_RANGE = 20.0         # maksimal masofa (grid birlik)
 WEAPON_HIT_RADIUS = 0.4        # dushman hitbox radiusi
 WEAPON_RECOIL_DURATION = 0.15   # recoil animatsiya davomiyligi
 
+# Ammo tizimi
+AMMO_MAX_MAGAZINE = 12
+AMMO_MAX_RESERVE = 60
+AMMO_START_MAGAZINE = 12
+AMMO_START_RESERVE = 36
+AMMO_RELOAD_TIME = 1.5
+
 # Dushman sog'ligi
 ENEMY_HEALTH = {'patrol': 30, 'chase': 50, 'teleport': 40, 'smart': 60}
 

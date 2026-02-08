@@ -67,8 +67,8 @@ class DifficultyConfig:
 LEVEL_EASY = DifficultyConfig(
     cols=20,
     rows=15,
-    enemy_count=0,
-    patrol_enemies=0,
+    enemy_count=2,
+    patrol_enemies=2,
     chase_enemies=0,
     teleport_enemies=0,
     smart_enemies=0,

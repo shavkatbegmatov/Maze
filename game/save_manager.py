@@ -22,7 +22,7 @@ class SaveManager:
         self.current_slot = None
 
     def save_game(self, level, player, game_state, slot_name="autosave",
-                  game_mode=0, player_3d=None):
+                  game_mode=0, player_3d=None, weapon=None):
         """
         Save current game state
 
@@ -39,7 +39,7 @@ class SaveManager:
         """
         try:
             save_data = self._serialize_game_state(
-                level, player, game_state, game_mode, player_3d
+                level, player, game_state, game_mode, player_3d, weapon
             )
 
             # Add metadata
@@ -88,7 +88,7 @@ class SaveManager:
             return None
 
     def _serialize_game_state(self, level, player, game_state,
-                              game_mode=0, player_3d=None):
+                              game_mode=0, player_3d=None, weapon=None):
         """
         Serialize game state to dictionary
         """
@@ -101,8 +101,18 @@ class SaveManager:
             },
             'game_mode': game_mode,
             'player_3d': self._serialize_player_3d(player_3d),
+            'weapon': self._serialize_weapon(weapon),
         }
         return data
+
+    def _serialize_weapon(self, weapon):
+        """Serialize weapon ammo holati"""
+        if weapon is None:
+            return None
+        return {
+            'magazine_ammo': weapon.magazine_ammo,
+            'reserve_ammo': weapon.reserve_ammo,
+        }
 
     def _serialize_level(self, level):
         """Serialize level data"""
@@ -332,10 +342,11 @@ class SaveManager:
             if boss_data:
                 self._restore_boss(level, boss_data)
 
-            # Extra data (game_mode, player_3d)
+            # Extra data (game_mode, player_3d, weapon)
             extra_data = {
                 'game_mode': save_data.get('game_mode', 0),
                 'player_3d': save_data.get('player_3d'),
+                'weapon': save_data.get('weapon'),
             }
 
             return level, True, extra_data
@@ -477,9 +488,9 @@ class SaveManager:
         except:
             return False
 
-    def auto_save(self, level, player, game_state, game_mode=0, player_3d=None):
+    def auto_save(self, level, player, game_state, game_mode=0, player_3d=None, weapon=None):
         """
         Auto-save the game
         """
         return self.save_game(level, player, game_state, slot_name="autosave",
-                              game_mode=game_mode, player_3d=player_3d)
+                              game_mode=game_mode, player_3d=player_3d, weapon=weapon)

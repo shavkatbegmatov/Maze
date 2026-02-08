@@ -332,7 +332,7 @@ class UIManager:
     def _get_difficulty_description(self, difficulty):
         """Get brief difficulty description"""
         descriptions = [
-            "Perfect for beginners - No enemies, no time limit",
+            "Easy mode - 2 patrol enemies, no time limit",
             "Moderate challenge - Basic enemies and obstacles",
             "Significant challenge - Many enemies and traps",
             "Very difficult - Smart enemies, complex maze",
@@ -486,7 +486,7 @@ class UIManager:
             text_rect = text.get_rect(center=(screen_w // 2, help_y + i * 18))
             screen.blit(text, text_rect)
 
-    def draw_hud_3d(self, screen, player, level, screen_h):
+    def draw_hud_3d(self, screen, player, level, screen_h, weapon=None):
         """
         Draw minimal HUD for 3D mode (overlay style)
 
@@ -495,6 +495,7 @@ class UIManager:
             player: Player instance (2D player for stats)
             level: Level instance
             screen_h: Screen height
+            weapon: Weapon instance (ammo ko'rsatish uchun)
         """
         screen_w = screen.get_width()
 
@@ -513,8 +514,26 @@ class UIManager:
         # Timer (center)
         self._draw_timer(screen, level, screen_w // 2, screen_h - bar_h + 5)
 
-        # Key inventory (right side)
+        # Key inventory (right side, yuqorida)
         self._draw_key_inventory(screen, player, screen_w - 130, screen_h - bar_h + 10)
+
+        # Ammo display (o'ng pastda)
+        if weapon is not None:
+            ammo_x = screen_w - 160
+            ammo_y = screen_h - bar_h + 12
+
+            # Ammo raqamlari
+            ammo_text = f"{weapon.magazine_ammo} / {weapon.reserve_ammo}"
+            ammo_render = self.font_large.render(ammo_text, True, (255, 255, 255))
+            ammo_rect = ammo_render.get_rect(right=screen_w - 15, centery=ammo_y + 10)
+            screen.blit(ammo_render, ammo_rect)
+
+            # Reload indikator
+            if weapon.is_reloading:
+                reload_text = "RELOADING..."
+                reload_render = self.font_small.render(reload_text, True, (255, 220, 80))
+                reload_rect = reload_render.get_rect(right=screen_w - 15, centery=ammo_y + 32)
+                screen.blit(reload_render, reload_rect)
 
         # Crosshair (4 chiziqli, markazda gap bilan)
         cx, cy = screen_w // 2, (screen_h - bar_h) // 2
