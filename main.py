@@ -143,7 +143,6 @@ class MazeGame:
         # Combat system
         self.weapon = Weapon()
         self.combat_manager = CombatManager()
-        self.pending_shoot = False
 
         # Sound system
         self.sound_manager = SoundManager()
@@ -785,9 +784,6 @@ class MazeGame:
             # Bo'sh magazin click
             if self.weapon.magazine_ammo <= 0 and not self.weapon.is_reloading:
                 self.sound_manager.play('empty_click')
-            elif self.weapon.fire_cooldown > 0 and self.weapon.magazine_ammo > 0:
-                # Cooldown davomida click — buffer qilish
-                self.pending_shoot = True
             return
 
         self.sound_manager.play('shoot')
@@ -1067,11 +1063,6 @@ class MazeGame:
 
         # Update weapon timers
         self.weapon.update(dt)
-
-        # Buffered shot — cooldown tugashi bilan otish
-        if self.pending_shoot and self.weapon.can_fire():
-            self.pending_shoot = False
-            self._player_shoot()
 
         # Update combat (dushmanlar otadi)
         old_flash = self.combat_manager.damage_flash_timer
