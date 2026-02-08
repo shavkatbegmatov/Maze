@@ -1415,56 +1415,56 @@ class MazeGame:
         sy = int(math.floor((world_y - camera.camera_y) * self.cell_size))
         return sx, sy
 
+    def _get_2d_wall_width(self):
+        """Get 2D wall stroke width in pixels for current cell size."""
+        # Keep 2D walls visually stable and not overly thick.
+        wall_w = max(2, round(self.cell_size * 0.12))
+        return min(8, wall_w)
+
     def _draw_maze(self, walls, cols, rows):
         """Draw maze walls - only visible cells for performance"""
         # Get visible range from camera
         min_x, max_x, min_y, max_y = self.camera_manager.get_visible_range()
 
-        # Devor qalinligi (pixel-perfect, cell ichida chiziladi)
-        wall_w = max(3, round(2 * _2D_WALL_HALF_THICKNESS * self.cell_size))
-        if wall_w >= self.cell_size:
-            wall_w = self.cell_size - 1
+        draw_min_x = max(0, min_x)
+        draw_max_x = min(cols, max_x)
+        draw_min_y = max(0, min_y)
+        draw_max_y = min(rows, max_y)
 
-        for y in range(min_y, max_y):
-            if y < 0 or y >= rows:
-                continue
+        if draw_min_x >= draw_max_x or draw_min_y >= draw_max_y:
+            return
+
+        wall_w = self._get_2d_wall_width()
+        for y in range(draw_min_y, draw_max_y):
             row_idx = y * cols
-            for x in range(min_x, max_x):
-                if x < 0 or x >= cols:
-                    continue
-
+            for x in range(draw_min_x, draw_max_x):
                 idx = row_idx + x
                 w = walls[idx]
 
-                # Convert to screen coordinates
                 x0, y0 = self._world_to_screen_grid(x, y)
                 x1 = x0 + self.cell_size
                 y1 = y0 + self.cell_size
 
-                # Canonical draw: shared walls are drawn once via TOP/LEFT.
-                # OR-merge with neighbor bits to tolerate asymmetry in wall data.
+                # Canonical draw: TOP/LEFT plus outer RIGHT/BOTTOM only.
                 draw_top = (w & TOP) != 0
                 if y > 0:
                     above = walls[(y - 1) * cols + x]
                     draw_top = draw_top or ((above & BOTTOM) != 0)
+                if draw_top:
+                    pygame.draw.line(self.screen, COLOR_WALL, (x0, y0), (x1, y0), wall_w)
 
                 draw_left = (w & LEFT) != 0
                 if x > 0:
                     left_neighbor = walls[row_idx + x - 1]
                     draw_left = draw_left or ((left_neighbor & RIGHT) != 0)
-
-                if draw_top:
-                    pygame.draw.rect(self.screen, COLOR_WALL, (x0, y0, self.cell_size, wall_w))
-
                 if draw_left:
-                    pygame.draw.rect(self.screen, COLOR_WALL, (x0, y0, wall_w, self.cell_size))
+                    pygame.draw.line(self.screen, COLOR_WALL, (x0, y0), (x0, y1), wall_w)
 
-                # Outer border walls are drawn once here.
+                # Outer borders
                 if y == rows - 1 and (w & BOTTOM) != 0:
-                    pygame.draw.rect(self.screen, COLOR_WALL, (x0, y1 - wall_w, self.cell_size, wall_w))
-
+                    pygame.draw.line(self.screen, COLOR_WALL, (x0, y1), (x1, y1), wall_w)
                 if x == cols - 1 and (w & RIGHT) != 0:
-                    pygame.draw.rect(self.screen, COLOR_WALL, (x1 - wall_w, y0, wall_w, self.cell_size))
+                    pygame.draw.line(self.screen, COLOR_WALL, (x1, y0), (x1, y1), wall_w)
 
     def _draw_cell(self, x, y, color, pad=6):
         """Draw filled cell with camera support"""
@@ -1473,7 +1473,7 @@ class MazeGame:
             return
 
         # Qalin devorlar bilan overlap bo'lmasligi uchun min padding
-        min_pad = max(3, round(2 * _2D_WALL_HALF_THICKNESS * self.cell_size)) // 2 + 1
+        min_pad = self._get_2d_wall_width() // 2 + 2
         if pad < min_pad:
             pad = min_pad
 
@@ -1550,7 +1550,7 @@ class MazeGame:
         pad = int(3 * boss.size_multiplier)
 
         # Qalin devorlar bilan overlap bo'lmasligi uchun min padding
-        min_pad = max(3, round(2 * _2D_WALL_HALF_THICKNESS * self.cell_size)) // 2 + 1
+        min_pad = self._get_2d_wall_width() // 2 + 2
         if pad < min_pad:
             pad = min_pad
 
@@ -1623,7 +1623,7 @@ class MazeGame:
 
             # Draw border — qalin devorlar bilan sinxron padding
             sx, sy = self._world_to_screen_grid(wall.x, wall.y)
-            bpad = max(3, round(2 * _2D_WALL_HALF_THICKNESS * self.cell_size)) // 2 + 1
+            bpad = self._get_2d_wall_width() // 2 + 2
             rx = sx + bpad
             ry = sy + bpad
             rw = self.cell_size - bpad * 2
