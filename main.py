@@ -396,7 +396,7 @@ class MazeGame:
         """Initialize 3D rendering components"""
         if self.renderer_3d is None:
             self.renderer_3d = Renderer3D(self.screen_w, self.screen_h - PANEL_H, fov=60)
-            self.minimap_3d = Minimap3D(width=150, height=100)
+            self.minimap_3d = Minimap3D(width=220, height=160)
 
     def _init_player_3d(self, level):
         """Initialize 3D player from level player position"""
