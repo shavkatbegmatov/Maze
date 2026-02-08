@@ -463,7 +463,9 @@ class MazeGame:
         level = self.level_manager.get_current_level()
         if level and level.generation_complete:
             success = self.save_manager.save_game(
-                level, level.player, self.state_manager, "quicksave"
+                level, level.player, self.state_manager, "quicksave",
+                game_mode=self.game_mode,
+                player_3d=self.player_3d
             )
             if success:
                 self._show_message("Game Saved! (F9 to load)")
@@ -474,12 +476,15 @@ class MazeGame:
         """Quick load game"""
         save_data = self.save_manager.load_game("quicksave")
         if save_data:
-            level, success = self.save_manager.restore_game_state(
+            level, success, extra_data = self.save_manager.restore_game_state(
                 save_data, self.level_manager
             )
             if success and level:
                 self.level_manager.current_level = level
-                self._resize_screen_for_level(level)
+
+                # game_mode tiklash
+                saved_mode = extra_data.get('game_mode', 0)
+                self.game_mode = saved_mode
 
                 # Recreate fog
                 self.fog_manager.create_fog(
@@ -491,8 +496,33 @@ class MazeGame:
                 # Clear particles
                 self.particle_system.clear()
 
-                # Set state to playing
-                self.state_manager.transition_to(GameState.PLAYING)
+                if saved_mode == 1:
+                    # 3D rejim
+                    self._create_screen(800, 600)
+                    self._init_3d_renderer()
+
+                    # Player3D tiklash
+                    p3d_data = extra_data.get('player_3d')
+                    if p3d_data:
+                        from renderer3d import Player3D
+                        self.player_3d = Player3D(level.player.x, level.player.y)
+                        self.player_3d.world_x = p3d_data['world_x']
+                        self.player_3d.world_y = p3d_data['world_y']
+                        self.player_3d.grid_x = p3d_data['grid_x']
+                        self.player_3d.grid_y = p3d_data['grid_y']
+                        self.player_3d.angle = p3d_data['angle']
+                        self.player_3d.pitch = p3d_data['pitch']
+                    else:
+                        self._init_player_3d(level)
+
+                    self.state_manager.transition_to(GameState.PLAYING_3D)
+                    self._grab_mouse()
+                else:
+                    # 2D rejim
+                    self._release_mouse()
+                    self._resize_screen_for_level(level)
+                    self.state_manager.transition_to(GameState.PLAYING)
+
                 self._show_message("Game Loaded!")
             else:
                 self._show_message("Load Failed!")
