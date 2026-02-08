@@ -28,10 +28,10 @@ _LEFT = int32(LEFT)
 @njit(cache=True)
 def _numba_draw_walls(ray_results, frame_buffer, tex_ns, tex_ew,
                       render_height, tex_size, z_buffer,
-                      cos_pitch, sin_pitch):
+                      pitch_offset):
     """
     Draw wall slices to frame buffer (Numba JIT compiled)
-    Uses true 3D perspective projection for pitch.
+    Uses Y-shearing for pitch (no keystone distortion).
 
     Args:
         ray_results: numpy array (num_rays, 6) from cast_all_rays
@@ -41,8 +41,7 @@ def _numba_draw_walls(ray_results, frame_buffer, tex_ns, tex_ew,
         render_height: screen height
         tex_size: texture dimension (e.g. 64)
         z_buffer: numpy array (width,) float32
-        cos_pitch: cosine of pitch angle
-        sin_pitch: sine of pitch angle
+        pitch_offset: horizon shift in pixels (int32)
     """
     top = int32(1)
     bottom = int32(4)
@@ -50,7 +49,7 @@ def _numba_draw_walls(ray_results, frame_buffer, tex_ns, tex_ew,
 
     num_rays = ray_results.shape[0]
     half_h = float64(render_height) / 2.0
-    f = float64(render_height)  # focal length
+    horizon = half_h + float64(pitch_offset)
 
     for x in range(num_rays):
         dist = ray_results[x, 0]
@@ -69,26 +68,10 @@ def _numba_draw_walls(ray_results, frame_buffer, tex_ns, tex_ew,
         # Store in z-buffer
         z_buffer[x] = corrected_dist
 
-        # True 3D projection: wall top (y_world = +0.5) and bottom (y_world = -0.5)
-        # Camera transform: y_cam = y_world * cos_p - d * sin_p
-        #                   z_cam = y_world * sin_p + d * cos_p
-        # Screen: screen_y = half_h - f * y_cam / z_cam
-
-        # Top edge (y_world = +0.5)
-        y_c_top = 0.5 * cos_pitch - d * sin_pitch
-        z_c_top = 0.5 * sin_pitch + d * cos_pitch
-        if z_c_top > 0.01:
-            full_top = int32(half_h - f * y_c_top / z_c_top)
-        else:
-            full_top = int32(-10000)
-
-        # Bottom edge (y_world = -0.5)
-        y_c_bot = -0.5 * cos_pitch - d * sin_pitch
-        z_c_bot = -0.5 * sin_pitch + d * cos_pitch
-        if z_c_bot > 0.01:
-            full_bottom = int32(half_h - f * y_c_bot / z_c_bot)
-        else:
-            full_bottom = int32(render_height + 10000)
+        # Y-shearing: wall height = render_height / d, centered on horizon
+        wall_height = float64(render_height) / d
+        full_top = int32(horizon - wall_height * 0.5)
+        full_bottom = int32(horizon + wall_height * 0.5)
 
         full_height = full_bottom - full_top
         if full_height <= 0:
@@ -177,13 +160,13 @@ def _numba_draw_walls(ray_results, frame_buffer, tex_ns, tex_ew,
 @njit(cache=True)
 def _numba_draw_floor_ceiling(frame_buffer, render_height, num_rays,
                                px, py, player_angle, half_fov,
-                               cos_pitch, sin_pitch):
+                               pitch_offset):
     """
     Draw perspective floor and ceiling with checkerboard pattern (Numba JIT)
-    Uses true 3D perspective projection for pitch.
+    Uses Y-shearing for pitch.
     """
     half_h = float64(render_height) / 2.0
-    f = float64(render_height)  # focal length (same as walls)
+    horizon = half_h + float64(pitch_offset)
 
     # Ray direction at left edge and right edge of screen
     angle_left = player_angle - half_fov
@@ -203,15 +186,9 @@ def _numba_draw_floor_ceiling(frame_buffer, render_height, num_rays,
     ceil_r2, ceil_g2, ceil_b2 = 25, 30, 42
 
     for y in range(render_height):
-        # True 3D row distance derivation:
-        # d = y_w * (f*cos_p - S*sin_p) / (S*cos_p + f*sin_p)
-        # where S = half_h - y, y_w = -0.5 (floor) or +0.5 (ceiling)
-        # ratio = A/B; ratio > 0 → ceiling, ratio < 0 → floor
-        S = half_h - float64(y)
-        A = f * cos_pitch - S * sin_pitch
-        B = S * cos_pitch + f * sin_pitch
+        dy = float64(y) - horizon
 
-        if abs(B) < 0.001:
+        if abs(dy) < 0.5:
             # Horizon line — draw dark
             for x in range(num_rays):
                 frame_buffer[x, y, 0] = 20
@@ -219,13 +196,8 @@ def _numba_draw_floor_ceiling(frame_buffer, render_height, num_rays,
                 frame_buffer[x, y, 2] = 25
             continue
 
-        row_dist = 0.5 * A / B
-
-        if row_dist > 0.0:
-            is_floor = False  # ceiling
-        else:
-            is_floor = True   # floor
-            row_dist = -row_dist
+        row_dist = half_h / abs(dy)
+        is_floor = (dy > 0.0)
 
         if row_dist < 0.01:
             for x in range(num_rays):
@@ -462,19 +434,11 @@ class Renderer3D:
         angle = player.angle
         half_fov = self.raycaster.half_fov_rad
 
-        # True 3D pitch: tan(θ) = pitch / 2
-        p = player.pitch
-        if p > 1.0:
-            p = 1.0
-        elif p < -1.0:
-            p = -1.0
-        hyp = math.sqrt(4.0 + p * p)
-        cos_p = 2.0 / hyp
-        sin_p = p / hyp
+        pitch_offset = int(player.pitch * self.render_height * 0.5)
 
         _numba_draw_floor_ceiling(
             self.frame_buffer, self.render_height, self.screen_width,
-            px, py, angle, half_fov, cos_p, sin_p
+            px, py, angle, half_fov, int32(pitch_offset)
         )
 
     def _draw_walls(self, player, walls, cols, rows):
@@ -485,22 +449,14 @@ class Renderer3D:
         # Cast all rays (returns numpy array)
         ray_results = self.raycaster.cast_all_rays_blockmap(walls, cols, rows, px, py, angle)
 
-        # True 3D pitch: tan(θ) = pitch / 2
-        p = player.pitch
-        if p > 1.0:
-            p = 1.0
-        elif p < -1.0:
-            p = -1.0
-        hyp = math.sqrt(4.0 + p * p)
-        cos_p = 2.0 / hyp
-        sin_p = p / hyp
+        pitch_offset = int(player.pitch * self.render_height * 0.5)
 
         # Call Numba JIT function
         _numba_draw_walls(
             ray_results, self.frame_buffer,
             self._tex_ns, self._tex_ew,
             int32(self.render_height), int32(self.texture_manager.texture_size),
-            self.z_buffer, cos_p, sin_p
+            self.z_buffer, int32(pitch_offset)
         )
 
     def _draw_entities(self, screen, player, level, fog_manager):
@@ -590,7 +546,7 @@ class Renderer3D:
         return fog_manager.is_visible(x, y)
 
     def _draw_sprite(self, screen, sprite, player):
-        """Draw a single sprite using pre-rendered surface with true 3D pitch"""
+        """Draw a single sprite using pre-rendered surface with Y-shearing"""
         px, py = player.world_x, player.world_y
         p_angle = player.angle
 
@@ -621,40 +577,13 @@ class Renderer3D:
         # Calculate screen position (horizontal)
         sprite_screen_x = int((self.screen_width / 2) * (1 + transform_x / transform_y))
 
-        # True 3D pitch projection for sprite
-        p = player.pitch
-        if p > 1.0:
-            p = 1.0
-        elif p < -1.0:
-            p = -1.0
-        hyp = math.sqrt(4.0 + p * p)
-        cos_p = 2.0 / hyp
-        sin_p = p / hyp
-
-        d = transform_y
-        base_size = sprite['size']
-        half_s = base_size * 0.5
+        # Y-shearing for sprite
         h = self.render_height
-        f = float(h)  # focal length
-        half_h = h / 2.0
+        pitch_offset = int(player.pitch * h * 0.5)
+        horizon = h // 2 + pitch_offset
+        base_size = sprite['size']
 
-        # Top of sprite (y_world = +half_s)
-        y_c_top = half_s * cos_p - d * sin_p
-        z_c_top = half_s * sin_p + d * cos_p
-        if z_c_top > 0.01:
-            screen_top = half_h - f * y_c_top / z_c_top
-        else:
-            screen_top = -10000.0
-
-        # Bottom of sprite (y_world = -half_s)
-        y_c_bot = -half_s * cos_p - d * sin_p
-        z_c_bot = -half_s * sin_p + d * cos_p
-        if z_c_bot > 0.01:
-            screen_bot = half_h - f * y_c_bot / z_c_bot
-        else:
-            screen_bot = h + 10000.0
-
-        sprite_height = int(screen_bot - screen_top)
+        sprite_height = int(abs(h / transform_y) * base_size)
         sprite_width = sprite_height
 
         if sprite_width <= 0 or sprite_height <= 0:
@@ -665,7 +594,7 @@ class Renderer3D:
         sprite_height = min(sprite_height, self.render_height * 2)
 
         draw_x = sprite_screen_x - sprite_width // 2
-        draw_y = int(screen_top)
+        draw_y = horizon - sprite_height // 2
 
         # Check if on screen
         if draw_x + sprite_width < 0 or draw_x >= self.screen_width:
