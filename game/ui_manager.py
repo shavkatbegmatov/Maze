@@ -68,6 +68,24 @@ class UIManager:
 
         pygame.draw.rect(screen, (112, 120, 140), (x, bar_y, width, height), 1, border_radius=8)
 
+    def _fit_text(self, text, max_width):
+        """Trim text with ellipsis to fit the given pixel width."""
+        if max_width <= 0:
+            return ""
+        if self.font_small.size(text)[0] <= max_width:
+            return text
+        ell = "..."
+        low, high = 0, len(text)
+        while low < high:
+            mid = (low + high) // 2
+            candidate = text[:mid].rstrip() + ell
+            if self.font_small.size(candidate)[0] <= max_width:
+                low = mid + 1
+            else:
+                high = mid
+        cut = max(0, low - 1)
+        return text[:cut].rstrip() + ell
+
     def draw_hud(self, screen, player, level, panel_y, screen_w, panel_h):
         """
         Draw HUD (Heads-Up Display)
@@ -84,14 +102,29 @@ class UIManager:
         pygame.draw.rect(screen, COLOR_PANEL_BG, (0, panel_y, screen_w, panel_h))
         pygame.draw.line(screen, (80, 88, 106), (0, panel_y), (screen_w, panel_y), 1)
 
-        margin = 12
-        gap = 10
+        margin = max(8, panel_h // 10)
+        gap = max(8, panel_h // 12)
         inner_y = panel_y + margin
         inner_h = panel_h - margin * 2
+        avail_w = screen_w - margin * 2
 
-        left_w = min(360, int(screen_w * 0.36))
-        right_w = min(250, int(screen_w * 0.24))
-        center_w = max(220, screen_w - (left_w + right_w + margin * 2 + gap * 2))
+        left_w = min(360, int(avail_w * 0.38))
+        right_w = min(260, int(avail_w * 0.30))
+        center_w = avail_w - left_w - right_w - gap * 2
+
+        min_center_w = 190
+        if center_w < min_center_w:
+            need = min_center_w - center_w
+            shrink_right = min(need, max(0, right_w - 180))
+            right_w -= shrink_right
+            need -= shrink_right
+            shrink_left = min(need, max(0, left_w - 230))
+            left_w -= shrink_left
+            center_w = avail_w - left_w - right_w - gap * 2
+
+        if center_w < 150:
+            center_w = 150
+            right_w = max(150, avail_w - left_w - center_w - gap * 2)
 
         left_rect = (margin, inner_y, left_w, inner_h)
         center_rect = (left_rect[0] + left_w + gap, inner_y, center_w, inner_h)
@@ -123,24 +156,27 @@ class UIManager:
 
         effects = player.get_active_effects()
         effects_text = "Effects: " + (", ".join(effects) if effects else "None")
+        effects_text = self._fit_text(effects_text, lw)
         effects_render = self.font_small.render(effects_text, True, COLOR_TEXT_DIM if not effects else COLOR_TEXT_HIGHLIGHT)
         screen.blit(effects_render, (lx, left_rect[1] + inner_h - 22))
 
         # Center: timer + run state
         cx = center_rect[0] + center_rect[2] // 2
         self._draw_timer(screen, level, cx, center_rect[1] + 4)
-        run_info = self.font_small.render(
-            f"Maze: {level.cols}x{level.rows}   Difficulty: {DIFFICULTY_NAMES[level.difficulty_level]}",
-            True, COLOR_TEXT_DIM
-        )
+        run_info_text = f"Maze: {level.cols}x{level.rows}   Difficulty: {DIFFICULTY_NAMES[level.difficulty_level]}"
+        run_info_text = self._fit_text(run_info_text, center_rect[2] - 20)
+        run_info = self.font_small.render(run_info_text, True, COLOR_TEXT_DIM)
         run_info_rect = run_info.get_rect(center=(cx, center_rect[1] + inner_h - 20))
         screen.blit(run_info, run_info_rect)
 
         # Right: keys + stats
         rx = right_rect[0] + 10
         ry = right_rect[1] + 8
-        self._draw_key_inventory(screen, player, rx, ry)
-        self._draw_stats(screen, player, level, rx, ry + 36)
+        self._draw_key_inventory(screen, player, rx, ry, max_width=right_rect[2] - 20, compact=True)
+        compact_stats = f"Moves: {player.moves}   Enemies: {len(level.enemy_manager.enemies)}   Traps: {len(level.trap_manager.traps)}"
+        compact_stats = self._fit_text(compact_stats, right_rect[2] - 20)
+        stats_render = self.font_small.render(compact_stats, True, COLOR_TEXT)
+        screen.blit(stats_render, (rx, right_rect[1] + inner_h - 22))
 
         # Boss health bar (top, above maze)
         if level.boss_manager.active and level.boss_manager.fight_started:
@@ -221,21 +257,47 @@ class UIManager:
             text_rect = text.get_rect(center=(x, y + 15))
             screen.blit(text, text_rect)
 
-    def _draw_key_inventory(self, screen, player, x, y):
+    def _draw_key_inventory(self, screen, player, x, y, max_width=None, compact=False):
         """Draw key inventory"""
         label = self.font_small.render("Keys", True, COLOR_TEXT)
         screen.blit(label, (x, y))
 
-        # Draw keys
-        key_x = x + 44
-        for i, key_color in enumerate(player.inventory['keys']):
-            color_rgb = KEY_COLORS.get(key_color, (255, 255, 255))
-            slot_x = key_x + i * 23
-            pygame.draw.rect(screen, (45, 50, 60), (slot_x, y, 18, 18), border_radius=4)
-            pygame.draw.rect(screen, color_rgb, (slot_x + 2, y + 2, 14, 14), border_radius=3)
-            pygame.draw.rect(screen, (180, 188, 206), (slot_x, y, 18, 18), 1, border_radius=4)
+        if compact:
+            slot_size = 14
+            slot_step = 17
+            label_gap = 34
+        else:
+            slot_size = 18
+            slot_step = 23
+            label_gap = 44
 
-        if not player.inventory['keys']:
+        # Draw keys
+        key_x = x + label_gap
+        keys = player.inventory['keys']
+        max_slots = len(keys)
+        if max_width is not None:
+            available = max_width - label_gap
+            max_slots = max(0, available // slot_step)
+
+        draw_count = min(len(keys), max_slots)
+        for i in range(draw_count):
+            key_color = keys[i]
+            color_rgb = KEY_COLORS.get(key_color, (255, 255, 255))
+            slot_x = key_x + i * slot_step
+            pygame.draw.rect(screen, (45, 50, 60), (slot_x, y, slot_size, slot_size), border_radius=4)
+            inset = 2 if slot_size >= 16 else 1
+            pygame.draw.rect(
+                screen, color_rgb,
+                (slot_x + inset, y + inset, slot_size - inset * 2, slot_size - inset * 2),
+                border_radius=3
+            )
+            pygame.draw.rect(screen, (180, 188, 206), (slot_x, y, slot_size, slot_size), 1, border_radius=4)
+
+        if len(keys) > draw_count:
+            more = self.font_small.render(f"+{len(keys) - draw_count}", True, COLOR_TEXT_DIM)
+            screen.blit(more, (key_x + draw_count * slot_step, y))
+
+        if not keys:
             empty = self.font_small.render("-", True, COLOR_TEXT_DIM)
             screen.blit(empty, (key_x, y))
 
