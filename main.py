@@ -1429,17 +1429,29 @@ class MazeGame:
                 y1 = y0 + self.cell_size
 
                 if w & TOP:
+                    wy = y0 - half_w
+                    if y == 0:
+                        wy = y0  # Chegara: to'liq qalinlik ichkariga
                     pygame.draw.rect(self.screen, COLOR_WALL,
-                                     (x0 - half_w, y0 - half_w, self.cell_size + wall_w, wall_w))
+                                     (x0 - half_w, wy, self.cell_size + wall_w, wall_w))
                 if w & RIGHT:
+                    wx = x1 - half_w
+                    if x == cols - 1:
+                        wx = x1 - wall_w  # Chegara: to'liq qalinlik ichkariga
                     pygame.draw.rect(self.screen, COLOR_WALL,
-                                     (x1 - half_w, y0 - half_w, wall_w, self.cell_size + wall_w))
+                                     (wx, y0 - half_w, wall_w, self.cell_size + wall_w))
                 if w & BOTTOM:
+                    wy = y1 - half_w
+                    if y == rows - 1:
+                        wy = y1 - wall_w  # Chegara: to'liq qalinlik ichkariga
                     pygame.draw.rect(self.screen, COLOR_WALL,
-                                     (x0 - half_w, y1 - half_w, self.cell_size + wall_w, wall_w))
+                                     (x0 - half_w, wy, self.cell_size + wall_w, wall_w))
                 if w & LEFT:
+                    wx = x0 - half_w
+                    if x == 0:
+                        wx = x0  # Chegara: to'liq qalinlik ichkariga
                     pygame.draw.rect(self.screen, COLOR_WALL,
-                                     (x0 - half_w, y0 - half_w, wall_w, self.cell_size + wall_w))
+                                     (wx, y0 - half_w, wall_w, self.cell_size + wall_w))
 
     def _draw_cell(self, x, y, color, pad=6):
         """Draw filled cell with camera support"""
