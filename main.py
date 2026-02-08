@@ -1405,51 +1405,79 @@ class MazeGame:
         if self.show_save_message:
             self._draw_save_message()
 
+    def _world_to_screen_grid(self, world_x, world_y):
+        """
+        Convert world cell coordinates to pixel-snapped screen coordinates.
+        Floor snapping keeps shared wall edges stable while camera moves.
+        """
+        camera = self.camera_manager.camera
+        sx = int(math.floor((world_x - camera.camera_x) * self.cell_size))
+        sy = int(math.floor((world_y - camera.camera_y) * self.cell_size))
+        return sx, sy
+
     def _draw_maze(self, walls, cols, rows):
         """Draw maze walls - only visible cells for performance"""
         # Get visible range from camera
         min_x, max_x, min_y, max_y = self.camera_manager.get_visible_range()
 
-        # Devor qalinligi — 3D bilan sinxron
+        # Devor qalinligi
         wall_w = max(3, round(2 * _2D_WALL_HALF_THICKNESS * self.cell_size))
         half_w = wall_w // 2
 
         for y in range(min_y, max_y):
+            if y < 0 or y >= rows:
+                continue
+            row_idx = y * cols
             for x in range(min_x, max_x):
-                if x < 0 or x >= cols or y < 0 or y >= rows:
+                if x < 0 or x >= cols:
                     continue
 
-                idx = y * cols + x
+                idx = row_idx + x
                 w = walls[idx]
 
                 # Convert to screen coordinates
-                sx, sy = self.camera_manager.world_to_screen(x, y)
-                x0, y0 = sx, sy
+                x0, y0 = self._world_to_screen_grid(x, y)
                 x1 = x0 + self.cell_size
                 y1 = y0 + self.cell_size
 
-                if w & TOP:
+                # Canonical draw: shared walls are drawn once via TOP/LEFT.
+                # OR-merge with neighbor bits to tolerate asymmetry in wall data.
+                draw_top = (w & TOP) != 0
+                if y > 0:
+                    above = walls[(y - 1) * cols + x]
+                    draw_top = draw_top or ((above & BOTTOM) != 0)
+
+                draw_left = (w & LEFT) != 0
+                if x > 0:
+                    left_neighbor = walls[row_idx + x - 1]
+                    draw_left = draw_left or ((left_neighbor & RIGHT) != 0)
+
+                if draw_top:
                     wy = y0 - half_w
                     if y == 0:
                         wy = y0  # Chegara: to'liq qalinlik ichkariga
                     pygame.draw.rect(self.screen, COLOR_WALL,
                                      (x0 - half_w, wy, self.cell_size + wall_w, wall_w))
-                if w & RIGHT:
-                    wx = x1 - half_w
-                    if x == cols - 1:
-                        wx = x1 - wall_w  # Chegara: to'liq qalinlik ichkariga
+
+                if draw_left:
+                    wx = x0 - half_w
+                    if x == 0:
+                        wx = x0  # Chegara: to'liq qalinlik ichkariga
                     pygame.draw.rect(self.screen, COLOR_WALL,
                                      (wx, y0 - half_w, wall_w, self.cell_size + wall_w))
-                if w & BOTTOM:
+
+                # Outer border walls are drawn once here.
+                if y == rows - 1 and (w & BOTTOM) != 0:
                     wy = y1 - half_w
                     if y == rows - 1:
                         wy = y1 - wall_w  # Chegara: to'liq qalinlik ichkariga
                     pygame.draw.rect(self.screen, COLOR_WALL,
                                      (x0 - half_w, wy, self.cell_size + wall_w, wall_w))
-                if w & LEFT:
-                    wx = x0 - half_w
-                    if x == 0:
-                        wx = x0  # Chegara: to'liq qalinlik ichkariga
+
+                if x == cols - 1 and (w & RIGHT) != 0:
+                    wx = x1 - half_w
+                    if x == cols - 1:
+                        wx = x1 - wall_w  # Chegara: to'liq qalinlik ichkariga
                     pygame.draw.rect(self.screen, COLOR_WALL,
                                      (wx, y0 - half_w, wall_w, self.cell_size + wall_w))
 
@@ -1464,8 +1492,8 @@ class MazeGame:
         if pad < min_pad:
             pad = min_pad
 
-        # Convert to screen coordinates
-        sx, sy = self.camera_manager.world_to_screen(x, y)
+        # Convert to pixel-snapped screen coordinates
+        sx, sy = self._world_to_screen_grid(x, y)
         rx = sx + pad
         ry = sy + pad
         rw = self.cell_size - pad * 2
@@ -1529,8 +1557,8 @@ class MazeGame:
         if not self.fog_manager.is_visible(boss.x, boss.y):
             return
 
-        # Convert to screen coordinates
-        sx, sy = self.camera_manager.world_to_screen(boss.x, boss.y)
+        # Convert to pixel-snapped screen coordinates
+        sx, sy = self._world_to_screen_grid(boss.x, boss.y)
 
         # Draw boss (larger than normal enemies)
         color = boss.get_color()
@@ -1609,7 +1637,7 @@ class MazeGame:
             self._draw_cell(wall.x, wall.y, color, pad=3)
 
             # Draw border — qalin devorlar bilan sinxron padding
-            sx, sy = self.camera_manager.world_to_screen(wall.x, wall.y)
+            sx, sy = self._world_to_screen_grid(wall.x, wall.y)
             bpad = max(3, round(2 * _2D_WALL_HALF_THICKNESS * self.cell_size)) // 2 + 1
             rx = sx + bpad
             ry = sy + bpad
@@ -1677,8 +1705,8 @@ class MazeGame:
                 if x < 0 or x >= level.cols or y < 0 or y >= level.rows:
                     continue
 
-                # Get screen position
-                sx, sy = self.camera_manager.world_to_screen(x, y)
+                # Get pixel-snapped screen position
+                sx, sy = self._world_to_screen_grid(x, y)
 
                 # Get visibility level for this cell (0.0 = invisible, 1.0 = visible)
                 visibility = fog.get_cell_visibility(x, y, level.player.x, level.player.y, vision_range)
