@@ -1456,30 +1456,38 @@ class MazeGame:
                     wy = y0 - half_w
                     if y == 0:
                         wy = y0  # Chegara: to'liq qalinlik ichkariga
+                    left_ext = half_w if x > 0 else 0
+                    right_ext = half_w if x < cols - 1 else 0
                     pygame.draw.rect(self.screen, COLOR_WALL,
-                                     (x0 - half_w, wy, self.cell_size + wall_w, wall_w))
+                                     (x0 - left_ext, wy, self.cell_size + left_ext + right_ext, wall_w))
 
                 if draw_left:
                     wx = x0 - half_w
                     if x == 0:
                         wx = x0  # Chegara: to'liq qalinlik ichkariga
+                    top_ext = half_w if y > 0 else 0
+                    bottom_ext = half_w if y < rows - 1 else 0
                     pygame.draw.rect(self.screen, COLOR_WALL,
-                                     (wx, y0 - half_w, wall_w, self.cell_size + wall_w))
+                                     (wx, y0 - top_ext, wall_w, self.cell_size + top_ext + bottom_ext))
 
                 # Outer border walls are drawn once here.
                 if y == rows - 1 and (w & BOTTOM) != 0:
                     wy = y1 - half_w
                     if y == rows - 1:
                         wy = y1 - wall_w  # Chegara: to'liq qalinlik ichkariga
+                    left_ext = half_w if x > 0 else 0
+                    right_ext = half_w if x < cols - 1 else 0
                     pygame.draw.rect(self.screen, COLOR_WALL,
-                                     (x0 - half_w, wy, self.cell_size + wall_w, wall_w))
+                                     (x0 - left_ext, wy, self.cell_size + left_ext + right_ext, wall_w))
 
                 if x == cols - 1 and (w & RIGHT) != 0:
                     wx = x1 - half_w
                     if x == cols - 1:
                         wx = x1 - wall_w  # Chegara: to'liq qalinlik ichkariga
+                    top_ext = half_w if y > 0 else 0
+                    bottom_ext = half_w if y < rows - 1 else 0
                     pygame.draw.rect(self.screen, COLOR_WALL,
-                                     (wx, y0 - half_w, wall_w, self.cell_size + wall_w))
+                                     (wx, y0 - top_ext, wall_w, self.cell_size + top_ext + bottom_ext))
 
     def _draw_cell(self, x, y, color, pad=6):
         """Draw filled cell with camera support"""
