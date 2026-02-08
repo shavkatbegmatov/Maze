@@ -23,6 +23,7 @@ class UIManager:
         self.font_medium = None
         self.font_large = None
         self.font_title = None
+        self._crosshair_color = (200, 200, 200)
         self._init_fonts()
 
     def _init_fonts(self):
@@ -515,14 +516,17 @@ class UIManager:
         # Key inventory (right side)
         self._draw_key_inventory(screen, player, screen_w - 130, screen_h - bar_h + 10)
 
-        # Crosshair (center of screen)
+        # Crosshair (4 chiziqli, markazda gap bilan)
         cx, cy = screen_w // 2, (screen_h - bar_h) // 2
-        crosshair_size = 8
-        crosshair_color = (200, 200, 200, 180)
+        crosshair_size = 10
+        gap = 4
+        crosshair_color = self._crosshair_color if hasattr(self, '_crosshair_color') else (200, 200, 200)
 
-        # Draw crosshair
-        pygame.draw.line(screen, crosshair_color, (cx - crosshair_size, cy), (cx + crosshair_size, cy), 2)
-        pygame.draw.line(screen, crosshair_color, (cx, cy - crosshair_size), (cx, cy + crosshair_size), 2)
+        # 4 ta chiziq (markazda bo'sh joy)
+        pygame.draw.line(screen, crosshair_color, (cx - crosshair_size, cy), (cx - gap, cy), 2)
+        pygame.draw.line(screen, crosshair_color, (cx + gap, cy), (cx + crosshair_size, cy), 2)
+        pygame.draw.line(screen, crosshair_color, (cx, cy - crosshair_size), (cx, cy - gap), 2)
+        pygame.draw.line(screen, crosshair_color, (cx, cy + gap), (cx, cy + crosshair_size), 2)
 
         # Boss health bar (top, if active)
         if level.boss_manager.active and level.boss_manager.fight_started:

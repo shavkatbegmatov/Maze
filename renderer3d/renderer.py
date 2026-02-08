@@ -482,14 +482,26 @@ class Renderer3D:
 
         # Enemies
         for enemy in level.enemy_manager.enemies:
+            # O'lik va animatsiya tugagan — chizilmaydi
+            if not enemy.alive and enemy.death_timer <= 0:
+                continue
             if self._is_visible(enemy.x, enemy.y, fog_manager):
-                enemy_type = getattr(enemy, 'enemy_type', 'patrol')
+                enemy_type = getattr(enemy, 'type', 'patrol')
                 cache_key = f'enemy_{enemy_type}'
                 surface = self._sprite_cache.get(cache_key, self._sprite_cache['enemy_patrol'])
-                sprites.append({
+                sprite_data = {
                     'x': 2 * enemy.x + 1.5, 'y': 2 * enemy.y + 1.5,
                     'surface': surface, 'size': 0.5
-                })
+                }
+                # Death animatsiya — kichrayish va so'lish
+                if not enemy.alive and enemy.death_timer > 0:
+                    death_progress = enemy.death_timer / 0.5
+                    sprite_data['size'] *= death_progress
+                    sprite_data['death_alpha'] = int(255 * death_progress)
+                # Flash — otib tegildi
+                if enemy.flash_timer > 0:
+                    sprite_data['flash_alpha'] = int(200 * (enemy.flash_timer / 0.15))
+                sprites.append(sprite_data)
 
         # Power-ups
         for powerup in level.powerup_manager.get_uncollected_powerups():
@@ -636,6 +648,19 @@ class Renderer3D:
             dark_overlay.fill((0, 0, 0))
             dark_overlay.set_alpha(int(255 * (1 - shade)))
             scaled.blit(dark_overlay, (0, 0))
+
+        # Death alpha — so'lib borish
+        death_alpha = sprite.get('death_alpha')
+        if death_alpha is not None:
+            scaled.set_alpha(death_alpha)
+
+        # Flash overlay — otib tegilganda oq miltillash
+        flash_alpha = sprite.get('flash_alpha')
+        if flash_alpha is not None and flash_alpha > 0:
+            flash_overlay = pygame.Surface((sprite_width, sprite_height))
+            flash_overlay.fill((255, 255, 255))
+            flash_overlay.set_alpha(min(255, flash_alpha))
+            scaled.blit(flash_overlay, (0, 0))
 
         # Blit to screen
         screen.blit(scaled, (draw_x, draw_y))

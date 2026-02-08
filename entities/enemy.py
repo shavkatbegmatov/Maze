@@ -8,6 +8,7 @@ from maze.maze_core import neighbors_open, astar_shortest_path, manhattan
 from utils.colors import (
     COLOR_ENEMY_PATROL, COLOR_ENEMY_CHASE, COLOR_ENEMY_TELEPORT, COLOR_ENEMY_SMART
 )
+from utils.constants import ENEMY_HEALTH
 
 
 class Enemy:
@@ -40,6 +41,13 @@ class Enemy:
         # Movement
         self.move_timer = 0.0
         self.move_cooldown = 0.4 / self.speed  # Seconds between moves
+
+        # Health system
+        self.max_health = ENEMY_HEALTH.get(enemy_type, 30)
+        self.health = self.max_health
+        self.alive = True
+        self.flash_timer = 0.0      # oq flash otib tegilganda
+        self.death_timer = 0.0      # o'lish animatsiyasi
 
         # Patrol-specific
         self.patrol_waypoints = []
@@ -89,6 +97,23 @@ class Enemy:
         }
         return colors.get(self.type, (255, 100, 100))
 
+    def take_damage(self, amount):
+        """Take damage, return True if killed"""
+        if not self.alive:
+            return False
+        self.health -= amount
+        self.flash_timer = 0.15  # oq flash
+        if self.health <= 0:
+            self.health = 0
+            self.alive = False
+            self.death_timer = 0.5  # o'lish animatsiyasi
+            return True
+        return False
+
+    def is_dead(self):
+        """True agar o'lik VA animatsiya tugagan"""
+        return not self.alive and self.death_timer <= 0
+
     def can_see_player(self, player_x, player_y):
         """Check if enemy can see player"""
         dist = abs(self.x - player_x) + abs(self.y - player_y)
@@ -114,6 +139,16 @@ class Enemy:
         Returns:
             True if enemy attacked player
         """
+        # Update flash timer
+        if self.flash_timer > 0:
+            self.flash_timer -= dt
+
+        # Dead enemy — faqat death timer kamayadi
+        if not self.alive:
+            if self.death_timer > 0:
+                self.death_timer -= dt
+            return False
+
         # Update move timer
         self.move_timer += dt
 
@@ -309,6 +344,10 @@ class Enemy:
         self.move_timer = 0.0
         self.current_waypoint = 0
         self.teleport_cooldown = 0.0
+        self.health = self.max_health
+        self.alive = True
+        self.flash_timer = 0.0
+        self.death_timer = 0.0
 
     def __repr__(self):
         return f"Enemy(pos=({self.x},{self.y}), type={self.type}, state={self.state})"
@@ -341,11 +380,19 @@ class EnemyManager:
         return player_attacked
 
     def check_collision_with_player(self, player_x, player_y):
-        """Check if player position collides with any enemy"""
+        """Check if player position collides with any alive enemy"""
         for enemy in self.enemies:
-            if enemy.x == player_x and enemy.y == player_y:
+            if enemy.alive and enemy.x == player_x and enemy.y == player_y:
                 return enemy
         return None
+
+    def get_alive_enemies(self):
+        """Get list of alive enemies"""
+        return [e for e in self.enemies if e.alive]
+
+    def remove_dead(self):
+        """Remove enemies whose death animation is complete"""
+        self.enemies = [e for e in self.enemies if not e.is_dead()]
 
     def get_enemies_in_range(self, x, y, range_cells):
         """Get enemies within range of a position"""

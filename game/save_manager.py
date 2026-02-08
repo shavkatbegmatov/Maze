@@ -155,7 +155,9 @@ class SaveManager:
                 'start_x': enemy.start_x,
                 'start_y': enemy.start_y,
                 'type': enemy.type,
-                'state': enemy.state
+                'state': enemy.state,
+                'health': enemy.health,
+                'alive': enemy.alive,
             })
         return enemies
 
@@ -354,6 +356,8 @@ class SaveManager:
             enemy.start_x = data['start_x']
             enemy.start_y = data['start_y']
             enemy.state = data['state']
+            enemy.health = data.get('health', enemy.max_health)
+            enemy.alive = data.get('alive', True)
             level.enemy_manager.enemies.append(enemy)
 
     def _restore_powerups(self, level, powerups_data):

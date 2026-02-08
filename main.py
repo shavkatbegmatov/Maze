@@ -45,6 +45,10 @@ from config import GAME_TITLE, GAME_VERSION
 # 3D Renderer imports
 from renderer3d import Raycaster, Player3D, Renderer3D, TextureManager, Minimap3D
 
+# Combat imports
+from game.weapon import Weapon
+from game.combat import CombatManager
+
 # 2D devor qalinligi (2D maze chizish uchun)
 _2D_WALL_HALF_THICKNESS = 0.2
 
@@ -133,6 +137,10 @@ class MazeGame:
         self.minimap_3d = None
         self.mouse_grabbed = False
 
+        # Combat system
+        self.weapon = Weapon()
+        self.combat_manager = CombatManager()
+
     def _create_screen(self, width, height):
         """Create or resize screen using DisplayManager"""
         self.screen_w = width
@@ -195,6 +203,11 @@ class MazeGame:
             if event.type == pygame.MOUSEMOTION:
                 if self.state_manager.current_state == GameState.PLAYING_3D and self.mouse_grabbed:
                     self._handle_3d_mouse_motion(event)
+
+            # Mouse click for shooting in 3D mode
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if self.state_manager.current_state == GameState.PLAYING_3D and self.mouse_grabbed:
+                    self._player_shoot()
 
             if event.type == pygame.KEYDOWN:
                 # Alt+Enter = fullscreen toggle
@@ -365,6 +378,8 @@ class MazeGame:
             self._quick_load()
         elif key == pygame.K_SPACE:
             self._attack_boss()
+        elif key == pygame.K_LCTRL:
+            self._player_shoot()
 
     def _handle_3d_mouse_motion(self, event):
         """Handle mouse motion for 3D look"""
@@ -734,6 +749,42 @@ class MazeGame:
                 enabled=level.config.fog_enabled
             )
 
+    def _player_shoot(self):
+        """O'yinchi o'q otish"""
+        level = self.level_manager.get_current_level()
+        if not level or not self.player_3d:
+            return
+
+        if not self.weapon.can_fire(level.player.stats['energy']):
+            return
+
+        # Energiya sarflash
+        level.player.stats['energy'] -= self.weapon.energy_cost
+
+        # Otish
+        result = self.weapon.fire(
+            self.player_3d, level.player,
+            level.enemy_manager, level.boss_manager,
+            level.grid, level.grid_cols, level.grid_rows
+        )
+
+        if result['hit']:
+            if result['enemy']:
+                # Dushman zarar oldi
+                killed = result['enemy'].take_damage(self.weapon.damage)
+                self.combat_manager.register_enemy_hit(result['enemy'])
+                if killed:
+                    self._show_message("Enemy eliminated!", 0.5)
+            elif result['boss_hit']:
+                # Boss zarar oldi
+                if level.boss_manager.active:
+                    if level.boss_manager.damage_boss(self.weapon.damage):
+                        self._show_message("BOSS DEFEATED!")
+                    else:
+                        boss = level.boss_manager.get_boss()
+                        if boss:
+                            self._show_message(f"Boss HP: {boss.health}/{boss.max_health}", 0.5)
+
     def _attack_boss(self):
         """Attack boss if player is adjacent"""
         level = self.level_manager.get_current_level()
@@ -952,8 +1003,27 @@ class MazeGame:
                 self.game_flow.game_over('died')
                 return
 
+        # Update weapon timers
+        self.weapon.update(dt)
+
+        # Update combat (dushmanlar otadi)
+        self.combat_manager.update(
+            dt, level.enemy_manager, level.boss_manager,
+            self.player_3d, level.player,
+            level.grid, level.grid_cols, level.grid_rows
+        )
+
+        # O'lik dushmanlarni tozalash
+        level.enemy_manager.remove_dead()
+
         # Update level (enemies, traps, etc.)
         result = self.game_flow.update(dt)
+
+        # Player o'limi tekshiruvi
+        if not level.player.is_alive():
+            self._release_mouse()
+            self.game_flow.game_over('died')
+            return
 
         # Check for level completion
         if level.player.x == level.goal_pos[0] and level.player.y == level.goal_pos[1]:
@@ -1195,6 +1265,13 @@ class MazeGame:
             position='top-right'
         )
 
+        # Combat overlays (renderer ustiga, HUD ostiga)
+        render_h = self.screen_h - PANEL_H
+        self.combat_manager.draw_damage_overlay(self.screen, self.screen_w, render_h)
+        self.weapon.draw_gun(self.screen, self.screen_w, render_h)
+        self.weapon.draw_muzzle_flash(self.screen, self.screen_w, render_h)
+        self.weapon.draw_hit_marker(self.screen, self.screen_w, render_h)
+
         # Draw HUD
         self.ui_manager.draw_hud_3d(
             self.screen, level.player, level, self.screen_h
@@ -1342,6 +1419,8 @@ class MazeGame:
 
     def _draw_enemies(self, level):
         for enemy in level.enemy_manager.enemies:
+            if not enemy.alive:
+                continue
             if self.camera_manager.is_visible(enemy.x, enemy.y) and self.fog_manager.is_visible(enemy.x, enemy.y):
                 self._draw_cell(enemy.x, enemy.y, enemy.get_color(), pad=7)
 

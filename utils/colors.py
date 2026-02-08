@@ -82,6 +82,16 @@ COLOR_MENU_OVERLAY = (10, 12, 16, 200)     # Menu overlay (with alpha)
 COLOR_MENU_SELECTION = (255, 220, 120)     # Selected menu item
 COLOR_MENU_BORDER = (255, 220, 120)        # Selection border
 
+# Combat colors
+COLOR_CROSSHAIR = (200, 200, 200)
+COLOR_CROSSHAIR_HIT = (255, 50, 50)
+COLOR_GUN_BARREL = (80, 85, 90)
+COLOR_GUN_BODY = (100, 105, 110)
+COLOR_GUN_GRIP = (60, 50, 45)
+COLOR_MUZZLE_FLASH = (255, 240, 150)
+COLOR_HIT_MARKER = (255, 255, 255)
+COLOR_DAMAGE_OVERLAY = (255, 0, 0)
+
 # Key-color mapping for easy access
 KEY_COLORS = {
     'red': COLOR_KEY_RED,

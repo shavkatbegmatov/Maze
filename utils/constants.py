@@ -97,5 +97,22 @@ SCORE_NO_DAMAGE_BONUS = 500
 SCORE_HINT_PENALTY = 100
 SCORE_DEATH_PENALTY = 200
 
+# Qurol sozlamalari
+WEAPON_DAMAGE = 25
+WEAPON_FIRE_RATE = 0.4          # o'qlar orasidagi vaqt (soniya)
+WEAPON_ENERGY_COST = 8.0        # har bir o'q uchun energiya
+WEAPON_MAX_RANGE = 20.0         # maksimal masofa (grid birlik)
+WEAPON_HIT_RADIUS = 0.4        # dushman hitbox radiusi
+WEAPON_RECOIL_DURATION = 0.15   # recoil animatsiya davomiyligi
+
+# Dushman sog'ligi
+ENEMY_HEALTH = {'patrol': 30, 'chase': 50, 'teleport': 40, 'smart': 60}
+
+# Dushman otish sozlamalari
+ENEMY_FIRE_RATE = 2.0
+ENEMY_ACCURACY = {'patrol': 0.15, 'chase': 0.25, 'teleport': 0.30, 'smart': 0.40}
+ENEMY_SHOOT_RANGE = {'patrol': 4.0, 'chase': 5.0, 'teleport': 6.0, 'smart': 7.0}
+ENEMY_SHOOT_DAMAGE = {'patrol': 5, 'chase': 8, 'teleport': 10, 'smart': 12}
+
 # Save file
 SAVE_FILE = "saves/savegame.json"
