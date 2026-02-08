@@ -1064,6 +1064,10 @@ class MazeGame:
         # Update weapon timers
         self.weapon.update(dt)
 
+        # Mouse polling — bosib tursa auto fire
+        if self.mouse_grabbed and pygame.mouse.get_pressed()[0]:
+            self._player_shoot()
+
         # Update combat (dushmanlar otadi)
         old_flash = self.combat_manager.damage_flash_timer
         self.combat_manager.update(

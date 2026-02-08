@@ -54,6 +54,10 @@ class Weapon:
         self.trail_duration = 0.12
         self.trail_hit = False
 
+        # Barrel tip pozitsiyasi (flash/trail uchun)
+        self._barrel_tip_x = 0.0
+        self._barrel_tip_y = 0.0
+
     def can_fire(self, player_energy=None):
         """Otish mumkinmi?"""
         if self.is_reloading:
@@ -266,13 +270,12 @@ class Weapon:
             self.sway_offset_y = abs(math.cos(self.bob_timer * 0.5)) * 1.5
 
     def draw_gun(self, screen, w, h):
-        """Professional pistol chizish"""
+        """Professional pistol chizish — priselga qarab burilgan"""
         # Recoil effekti — smooth quadratic
         recoil_x = 0
         recoil_y = 0
         if self.recoil_timer > 0:
             t = self.recoil_timer / WEAPON_RECOIL_DURATION
-            # Quadratic ease out
             recoil_y = int(t * t * 20)
             recoil_x = int(t * t * 3)
 
@@ -280,151 +283,145 @@ class Weapon:
         sway_x = int(self.sway_offset_x)
         sway_y = int(self.sway_offset_y)
 
-        # Qurol pozitsiyasi
-        gun_x = w // 2 + 70 + sway_x + recoil_x
-        gun_y = h - 90 - recoil_y + sway_y
+        # Ekrandagi qurol markazi (grip markazi)
+        screen_gx = w // 2 + 40 + sway_x + recoil_x
+        screen_gy = h - 90 - recoil_y + sway_y
 
         # Reload animatsiya — qurol pastga tushadi
         if self.is_reloading:
             reload_progress = self.reload_timer / AMMO_RELOAD_TIME
-            # Parabola: pastga tushib qaytadi
             reload_offset = int(math.sin(reload_progress * math.pi) * 40)
-            gun_y += reload_offset
+            screen_gy += reload_offset
 
-        # === SLIDE (barrel ustki metall qism) ===
+        # --- Pivot nuqta: grip markazi ---
+        pivot_sx = screen_gx
+        pivot_sy = screen_gy + 35
+
+        # --- Tilt burchagi: pivot → crosshair ---
+        cx, cy = w // 2, h // 2
+        tilt_deg = math.degrees(math.atan2(pivot_sx - cx, pivot_sy - cy))
+
+        # --- Surface yaratish ---
+        surf_w, surf_h = 80, 200
+        gun_surf = pygame.Surface((surf_w, surf_h), pygame.SRCALPHA)
+
+        # Local koordinatalar — qurol markazi surface da
+        gx = surf_w // 2   # 40
+        gy = 65             # pivot (100) dan 35px tepada
+
+        # === SLIDE ===
         slide_w, slide_h = 20, 45
-        slide_x = gun_x - slide_w // 2
-        slide_y = gun_y - 30
-        slide_color = (85, 90, 95)
-        pygame.draw.rect(screen, slide_color,
+        slide_x = gx - slide_w // 2
+        slide_y = gy - 30
+        pygame.draw.rect(gun_surf, (85, 90, 95),
                          (slide_x, slide_y, slide_w, slide_h), border_radius=3)
-
-        # Slide highlight (chap tomonda yorug' chiziq)
-        pygame.draw.line(screen, (120, 125, 130),
+        pygame.draw.line(gun_surf, (120, 125, 130),
                          (slide_x + 2, slide_y + 3),
                          (slide_x + 2, slide_y + slide_h - 3), 1)
-        # Slide shadow (o'ng tomonda qorong'i chiziq)
-        pygame.draw.line(screen, (55, 58, 62),
+        pygame.draw.line(gun_surf, (55, 58, 62),
                          (slide_x + slide_w - 2, slide_y + 3),
                          (slide_x + slide_w - 2, slide_y + slide_h - 3), 1)
-
-        # Slide serration chiziqlari (tepa qism)
         for i in range(4):
             ly = slide_y + 4 + i * 3
-            pygame.draw.line(screen, (70, 73, 78),
+            pygame.draw.line(gun_surf, (70, 73, 78),
                              (slide_x + 3, ly), (slide_x + slide_w - 3, ly), 1)
 
         # === EJECTION PORT ===
         ej_w, ej_h = 6, 10
         ej_x = slide_x + slide_w - ej_w - 2
         ej_y = slide_y + 16
-        pygame.draw.rect(screen, (40, 42, 45), (ej_x, ej_y, ej_w, ej_h), border_radius=1)
+        pygame.draw.rect(gun_surf, (40, 42, 45), (ej_x, ej_y, ej_w, ej_h), border_radius=1)
 
-        # === BARREL (tepa qism) ===
+        # === BARREL ===
         barrel_w, barrel_h = 10, 14
-        barrel_x = gun_x - barrel_w // 2
+        barrel_x = gx - barrel_w // 2
         barrel_y = slide_y - barrel_h + 2
-        pygame.draw.rect(screen, (75, 78, 82),
+        pygame.draw.rect(gun_surf, (75, 78, 82),
                          (barrel_x, barrel_y, barrel_w, barrel_h), border_radius=2)
-
-        # Barrel teshigi
-        pygame.draw.circle(screen, (25, 25, 30),
-                           (gun_x, barrel_y + 3), 3)
-        pygame.draw.circle(screen, (15, 15, 18),
-                           (gun_x, barrel_y + 3), 2)
+        pygame.draw.circle(gun_surf, (25, 25, 30), (gx, barrel_y + 3), 3)
+        pygame.draw.circle(gun_surf, (15, 15, 18), (gx, barrel_y + 3), 2)
 
         # === FRONT SIGHT ===
         sight_w, sight_h = 4, 6
-        pygame.draw.rect(screen, (60, 63, 68),
-                         (gun_x - sight_w // 2, barrel_y - sight_h + 2, sight_w, sight_h))
+        pygame.draw.rect(gun_surf, (60, 63, 68),
+                         (gx - sight_w // 2, barrel_y - sight_h + 2, sight_w, sight_h))
 
         # === REAR SIGHT ===
         rear_y = slide_y + 2
-        pygame.draw.rect(screen, (60, 63, 68),
+        pygame.draw.rect(gun_surf, (60, 63, 68),
                          (slide_x + 2, rear_y, 4, 5))
-        pygame.draw.rect(screen, (60, 63, 68),
+        pygame.draw.rect(gun_surf, (60, 63, 68),
                          (slide_x + slide_w - 6, rear_y, 4, 5))
 
         # === FRAME / BODY ===
         frame_w, frame_h = 24, 20
-        frame_x = gun_x - frame_w // 2
+        frame_x = gx - frame_w // 2
         frame_y = slide_y + slide_h - 2
-        frame_color = (70, 72, 76)
-        pygame.draw.rect(screen, frame_color,
+        pygame.draw.rect(gun_surf, (70, 72, 76),
                          (frame_x, frame_y, frame_w, frame_h), border_radius=2)
 
         # === TRIGGER GUARD ===
         guard_y = frame_y + 6
-        # Arc shakl
-        pygame.draw.arc(screen, (80, 83, 88),
+        pygame.draw.arc(gun_surf, (80, 83, 88),
                         (frame_x + 2, guard_y, frame_w - 4, 16),
                         math.pi, 2 * math.pi, 2)
-        # Pastki chiziq
-        pygame.draw.line(screen, (80, 83, 88),
+        pygame.draw.line(gun_surf, (80, 83, 88),
                          (frame_x + 2, guard_y + 8),
                          (frame_x + frame_w - 2, guard_y + 8), 2)
 
         # === TRIGGER ===
-        trigger_x = gun_x - 1
+        trigger_x = gx - 1
         trigger_y1 = guard_y + 2
         trigger_y2 = guard_y + 7
-        pygame.draw.line(screen, (100, 100, 105),
+        pygame.draw.line(gun_surf, (100, 100, 105),
                          (trigger_x, trigger_y1),
                          (trigger_x - 2, trigger_y2), 2)
 
         # === GRIP ===
         grip_top_y = frame_y + frame_h - 2
         grip_points = [
-            (gun_x - 10, grip_top_y),
-            (gun_x + 12, grip_top_y),
-            (gun_x + 16, grip_top_y + 35),
-            (gun_x - 4, grip_top_y + 35),
+            (gx - 10, grip_top_y),
+            (gx + 12, grip_top_y),
+            (gx + 16, grip_top_y + 35),
+            (gx - 4, grip_top_y + 35),
         ]
-        grip_color = (50, 45, 40)
-        pygame.draw.polygon(screen, grip_color, grip_points)
-
-        # Grip texture chiziqlari
+        pygame.draw.polygon(gun_surf, (50, 45, 40), grip_points)
         for i in range(6):
-            gy = grip_top_y + 5 + i * 5
-            # Interpolated x positions
-            t = (gy - grip_top_y) / 35.0
-            lx = int(gun_x - 10 + t * (gun_x - 4 - (gun_x - 10)))
-            rx = int(gun_x + 12 + t * (gun_x + 16 - (gun_x + 12)))
-            pygame.draw.line(screen, (60, 55, 50),
-                             (lx + 2, gy), (rx - 2, gy), 1)
-
-        # Grip highlight (chap chekka)
-        pygame.draw.line(screen, (70, 65, 58),
-                         (gun_x - 9, grip_top_y + 2),
-                         (gun_x - 5, grip_top_y + 33), 1)
+            gy_line = grip_top_y + 5 + i * 5
+            t = (gy_line - grip_top_y) / 35.0
+            lx = int(gx - 10 + t * (gx - 4 - (gx - 10)))
+            rx = int(gx + 12 + t * (gx + 16 - (gx + 12)))
+            pygame.draw.line(gun_surf, (60, 55, 50),
+                             (lx + 2, gy_line), (rx - 2, gy_line), 1)
+        pygame.draw.line(gun_surf, (70, 65, 58),
+                         (gx - 9, grip_top_y + 2),
+                         (gx - 5, grip_top_y + 33), 1)
 
         # === MAGAZINE BASE ===
-        mag_w = 14
-        mag_h = 5
-        mag_x = gun_x - mag_w // 2 + 3
+        mag_w, mag_h = 14, 5
+        mag_x = gx - mag_w // 2 + 3
         mag_y = grip_top_y + 33
-        pygame.draw.rect(screen, (65, 68, 72),
+        pygame.draw.rect(gun_surf, (65, 68, 72),
                          (mag_x, mag_y, mag_w, mag_h), border_radius=2)
+
+        # --- Rotate va blit ---
+        rotated = pygame.transform.rotate(gun_surf, tilt_deg)
+        rot_rect = rotated.get_rect(center=(pivot_sx, pivot_sy))
+        screen.blit(rotated, rot_rect)
+
+        # --- Barrel tip hisoblash (flash/trail uchun) ---
+        barrel_offset = -81  # pivot dan barrel uchigacha (yuqoriga)
+        rad = math.radians(tilt_deg)
+        self._barrel_tip_x = pivot_sx + barrel_offset * math.sin(rad)
+        self._barrel_tip_y = pivot_sy + barrel_offset * math.cos(rad)
 
     def draw_muzzle_flash(self, screen, w, h):
         """Multi-layer muzzle flash effekti"""
         if self.muzzle_flash_timer <= 0:
             return
 
-        recoil_y = 0
-        if self.recoil_timer > 0:
-            t = self.recoil_timer / WEAPON_RECOIL_DURATION
-            recoil_y = int(t * t * 20)
-
-        sway_x = int(self.sway_offset_x)
-        sway_y = int(self.sway_offset_y)
-
-        gun_x = w // 2 + 70 + sway_x
-        gun_y = h - 90 - recoil_y + sway_y
-
-        # Flash barrel uchiga
-        flash_cx = gun_x
-        flash_cy = gun_y - 42
+        flash_cx = int(self._barrel_tip_x)
+        flash_cy = int(self._barrel_tip_y)
 
         flash_alpha = int(255 * (self.muzzle_flash_timer / 0.06))
         flash_alpha = min(255, flash_alpha)
@@ -490,11 +487,9 @@ class Weapon:
 
         alpha = int(255 * (self.trail_timer / self.trail_duration))
 
-        # Barrel uchi pozitsiyasi (draw_gun bilan sinxron)
-        sway_x = int(self.sway_offset_x)
-        sway_y = int(self.sway_offset_y)
-        barrel_x = w // 2 + 70 + sway_x
-        barrel_y = h - 90 + sway_y - 42
+        # Barrel uchi pozitsiyasi (draw_gun dan)
+        barrel_x = int(self._barrel_tip_x)
+        barrel_y = int(self._barrel_tip_y)
 
         # Target — ekran markazi (crosshair)
         target_x = w // 2

@@ -99,7 +99,7 @@ SCORE_DEATH_PENALTY = 200
 
 # Qurol sozlamalari
 WEAPON_DAMAGE = 25
-WEAPON_FIRE_RATE = 0.4          # o'qlar orasidagi vaqt (soniya)
+WEAPON_FIRE_RATE = 0.2          # o'qlar orasidagi vaqt (soniya)
 WEAPON_ENERGY_COST = 8.0        # har bir o'q uchun energiya
 WEAPON_MAX_RANGE = 20.0         # maksimal masofa (grid birlik)
 WEAPON_HIT_RADIUS = 0.4        # dushman hitbox radiusi
