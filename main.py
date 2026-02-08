@@ -1712,14 +1712,26 @@ class MazeGame:
     def _draw_minimap(self, level):
         """Draw minimap when in camera mode"""
         # Minimap dimensions
-        map_w = 150
-        map_h = 100
-        map_x = self.screen_w - map_w - 10
-        map_y = 10
+        map_w = 176
+        map_h = 118
+        map_x = self.screen_w - map_w - 14
+        map_y = 14
 
-        # Background
-        pygame.draw.rect(self.screen, (20, 22, 28, 200), (map_x - 2, map_y - 2, map_w + 4, map_h + 4), border_radius=5)
-        pygame.draw.rect(self.screen, (40, 45, 55), (map_x, map_y, map_w, map_h), border_radius=3)
+        # Card background
+        card_rect = pygame.Rect(map_x - 8, map_y - 24, map_w + 16, map_h + 34)
+        card = pygame.Surface((card_rect.w, card_rect.h), pygame.SRCALPHA)
+        pygame.draw.rect(card, (22, 26, 34, 224), (0, 0, card_rect.w, card_rect.h), border_radius=12)
+        pygame.draw.rect(card, (88, 98, 118, 230), (0, 0, card_rect.w, card_rect.h), 1, border_radius=12)
+        self.screen.blit(card, card_rect.topleft)
+
+        # Header
+        font = pygame.font.SysFont("consolas", 11, bold=True)
+        label = font.render("MINIMAP", True, (190, 198, 216))
+        self.screen.blit(label, (map_x - 1, map_y - 19))
+
+        # Minimap background
+        pygame.draw.rect(self.screen, (36, 42, 54), (map_x, map_y, map_w, map_h), border_radius=6)
+        pygame.draw.rect(self.screen, (76, 86, 102), (map_x, map_y, map_w, map_h), 1, border_radius=6)
 
         # Scale factors
         scale_x = map_w / level.cols
@@ -1732,20 +1744,20 @@ class MazeGame:
                     if self.fog_manager.fog.explored[y][x]:
                         px = map_x + int(x * scale_x)
                         py = map_y + int(y * scale_y)
-                        pygame.draw.rect(self.screen, (60, 65, 75), (px, py, max(1, int(scale_x)), max(1, int(scale_y))))
+                        pygame.draw.rect(self.screen, (86, 94, 108), (px, py, max(1, int(scale_x)), max(1, int(scale_y))))
         else:
             # No fog - show entire maze
-            pygame.draw.rect(self.screen, (50, 55, 65), (map_x, map_y, map_w, map_h))
+            pygame.draw.rect(self.screen, (78, 86, 98), (map_x, map_y, map_w, map_h), border_radius=6)
 
         # Draw goal
         gx = map_x + int(level.goal_pos[0] * scale_x)
         gy = map_y + int(level.goal_pos[1] * scale_y)
-        pygame.draw.rect(self.screen, COLOR_GOAL, (gx, gy, max(3, int(scale_x * 2)), max(3, int(scale_y * 2))))
+        pygame.draw.rect(self.screen, COLOR_GOAL, (gx, gy, max(4, int(scale_x * 2)), max(4, int(scale_y * 2))), border_radius=2)
 
         # Draw player
         px = map_x + int(level.player.x * scale_x)
         py = map_y + int(level.player.y * scale_y)
-        pygame.draw.rect(self.screen, COLOR_PLAYER, (px, py, max(3, int(scale_x * 2)), max(3, int(scale_y * 2))))
+        pygame.draw.rect(self.screen, COLOR_PLAYER, (px, py, max(4, int(scale_x * 2)), max(4, int(scale_y * 2))), border_radius=2)
 
         # Draw viewport rectangle
         camera = self.camera_manager.camera
@@ -1753,23 +1765,20 @@ class MazeGame:
         vy = map_y + int(camera.camera_y * scale_y)
         vw = int(camera.viewport_cols * scale_x)
         vh = int(camera.viewport_rows * scale_y)
-        pygame.draw.rect(self.screen, (255, 255, 255), (vx, vy, vw, vh), 1)
-
-        # Label
-        font = pygame.font.SysFont("consolas", 10)
-        label = font.render("MINIMAP", True, (150, 150, 150))
-        self.screen.blit(label, (map_x + 5, map_y + map_h - 15))
+        pygame.draw.rect(self.screen, (214, 224, 240), (vx, vy, vw, vh), 1)
 
     def _draw_save_message(self):
         """Draw save/load message"""
-        font = pygame.font.SysFont("consolas", 24, bold=True)
-        text = font.render(self.save_message_text, True, (255, 220, 100))
+        font = pygame.font.SysFont("consolas", 22, bold=True)
+        text = font.render(self.save_message_text, True, (248, 230, 140))
         text_rect = text.get_rect(center=(self.screen_w // 2, 50))
 
-        # Background
-        bg_rect = text_rect.inflate(30, 15)
-        pygame.draw.rect(self.screen, (30, 30, 40), bg_rect, border_radius=8)
-        pygame.draw.rect(self.screen, (255, 220, 100), bg_rect, 2, border_radius=8)
+        # Card background
+        bg_rect = text_rect.inflate(34, 18)
+        card = pygame.Surface((bg_rect.w, bg_rect.h), pygame.SRCALPHA)
+        pygame.draw.rect(card, (28, 32, 42, 226), (0, 0, bg_rect.w, bg_rect.h), border_radius=10)
+        pygame.draw.rect(card, (196, 168, 92, 240), (0, 0, bg_rect.w, bg_rect.h), 1, border_radius=10)
+        self.screen.blit(card, bg_rect.topleft)
 
         self.screen.blit(text, text_rect)
 

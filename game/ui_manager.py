@@ -29,10 +29,44 @@ class UIManager:
     def _init_fonts(self):
         """Initialize fonts"""
         pygame.font.init()
-        self.font_small = pygame.font.SysFont("consolas", 14)
-        self.font_medium = pygame.font.SysFont("consolas", 18)
-        self.font_large = pygame.font.SysFont("consolas", 28, bold=True)
-        self.font_title = pygame.font.SysFont("consolas", 48, bold=True)
+        self.font_small = pygame.font.SysFont("consolas", 15)
+        self.font_medium = pygame.font.SysFont("consolas", 20)
+        self.font_large = pygame.font.SysFont("consolas", 30, bold=True)
+        self.font_title = pygame.font.SysFont("consolas", 50, bold=True)
+
+    @staticmethod
+    def _draw_panel_block(screen, rect, fill_rgb, border_rgb, radius=12, alpha=230, border_width=1):
+        """Draw rounded translucent panel block."""
+        x, y, w, h = rect
+        if w <= 0 or h <= 0:
+            return
+        surf = pygame.Surface((w, h), pygame.SRCALPHA)
+        pygame.draw.rect(surf, (*fill_rgb, alpha), (0, 0, w, h), border_radius=radius)
+        if border_width > 0:
+            pygame.draw.rect(surf, (*border_rgb, min(255, alpha + 20)), (0, 0, w, h), border_width, border_radius=radius)
+        screen.blit(surf, (x, y))
+
+    def _draw_stat_bar_block(self, screen, label, current, maximum, x, y, width, height, fill_color):
+        """Draw modern HUD stat bar with label and numeric values."""
+        # Label row
+        label_text = self.font_small.render(label, True, (210, 215, 225))
+        value_text = self.font_small.render(f"{int(current)}/{int(maximum)}", True, (210, 215, 225))
+        screen.blit(label_text, (x, y))
+        value_rect = value_text.get_rect(right=x + width, top=y)
+        screen.blit(value_text, value_rect)
+
+        bar_y = y + 18
+        bar_bg = (46, 52, 64)
+        pygame.draw.rect(screen, bar_bg, (x, bar_y, width, height), border_radius=8)
+
+        pct = 0.0
+        if maximum > 0:
+            pct = max(0.0, min(1.0, float(current) / float(maximum)))
+        fill_w = int(width * pct)
+        if fill_w > 0:
+            pygame.draw.rect(screen, fill_color, (x, bar_y, fill_w, height), border_radius=8)
+
+        pygame.draw.rect(screen, (112, 120, 140), (x, bar_y, width, height), 1, border_radius=8)
 
     def draw_hud(self, screen, player, level, panel_y, screen_w, panel_h):
         """
@@ -46,26 +80,67 @@ class UIManager:
             screen_w: Screen width
             panel_h: Panel height
         """
-        # Panel background
+        # Base panel
         pygame.draw.rect(screen, COLOR_PANEL_BG, (0, panel_y, screen_w, panel_h))
+        pygame.draw.line(screen, (80, 88, 106), (0, panel_y), (screen_w, panel_y), 1)
 
-        # Health bar (top left)
-        self._draw_health_bar(screen, player, 10, panel_y + 10, 200, 20)
+        margin = 12
+        gap = 10
+        inner_y = panel_y + margin
+        inner_h = panel_h - margin * 2
 
-        # Energy bar (below health)
-        self._draw_energy_bar(screen, player, 10, panel_y + 35, 200, 15)
+        left_w = min(360, int(screen_w * 0.36))
+        right_w = min(250, int(screen_w * 0.24))
+        center_w = max(220, screen_w - (left_w + right_w + margin * 2 + gap * 2))
 
-        # Timer (top center)
-        self._draw_timer(screen, level, screen_w // 2, panel_y + 10)
+        left_rect = (margin, inner_y, left_w, inner_h)
+        center_rect = (left_rect[0] + left_w + gap, inner_y, center_w, inner_h)
+        right_rect = (center_rect[0] + center_w + gap, inner_y, right_w, inner_h)
 
-        # Key inventory (top right)
-        self._draw_key_inventory(screen, player, screen_w - 150, panel_y + 10)
+        self._draw_panel_block(screen, left_rect, (24, 28, 36), (72, 80, 96), radius=12, alpha=235)
+        self._draw_panel_block(screen, center_rect, (24, 28, 36), (72, 80, 96), radius=12, alpha=235)
+        self._draw_panel_block(screen, right_rect, (24, 28, 36), (72, 80, 96), radius=12, alpha=235)
 
-        # Active effects (bottom left)
-        self._draw_active_effects(screen, player, 10, panel_y + panel_h - 25)
+        # Left: vitals
+        lx = left_rect[0] + 12
+        ly = left_rect[1] + 8
+        lw = left_rect[2] - 24
+        self._draw_stat_bar_block(
+            screen,
+            "HEALTH",
+            player.stats['health'],
+            player.stats['max_health'],
+            lx, ly, lw, 14,
+            COLOR_HEALTH_BAR_FULL if player.get_health_percent() > 0.35 else COLOR_HEALTH_BAR_LOW
+        )
+        self._draw_stat_bar_block(
+            screen,
+            "ENERGY",
+            player.stats['energy'],
+            player.stats['max_energy'],
+            lx, ly + 40, lw, 12, COLOR_ENERGY_BAR
+        )
 
-        # Stats (bottom right)
-        self._draw_stats(screen, player, level, screen_w - 200, panel_y + 55)
+        effects = player.get_active_effects()
+        effects_text = "Effects: " + (", ".join(effects) if effects else "None")
+        effects_render = self.font_small.render(effects_text, True, COLOR_TEXT_DIM if not effects else COLOR_TEXT_HIGHLIGHT)
+        screen.blit(effects_render, (lx, left_rect[1] + inner_h - 22))
+
+        # Center: timer + run state
+        cx = center_rect[0] + center_rect[2] // 2
+        self._draw_timer(screen, level, cx, center_rect[1] + 4)
+        run_info = self.font_small.render(
+            f"Maze: {level.cols}x{level.rows}   Difficulty: {DIFFICULTY_NAMES[level.difficulty_level]}",
+            True, COLOR_TEXT_DIM
+        )
+        run_info_rect = run_info.get_rect(center=(cx, center_rect[1] + inner_h - 20))
+        screen.blit(run_info, run_info_rect)
+
+        # Right: keys + stats
+        rx = right_rect[0] + 10
+        ry = right_rect[1] + 8
+        self._draw_key_inventory(screen, player, rx, ry)
+        self._draw_stats(screen, player, level, rx, ry + 36)
 
         # Boss health bar (top, above maze)
         if level.boss_manager.active and level.boss_manager.fight_started:
@@ -148,15 +223,21 @@ class UIManager:
 
     def _draw_key_inventory(self, screen, player, x, y):
         """Draw key inventory"""
-        label = self.font_small.render("Keys:", True, COLOR_TEXT)
+        label = self.font_small.render("Keys", True, COLOR_TEXT)
         screen.blit(label, (x, y))
 
         # Draw keys
-        key_x = x + 50
+        key_x = x + 44
         for i, key_color in enumerate(player.inventory['keys']):
             color_rgb = KEY_COLORS.get(key_color, (255, 255, 255))
-            pygame.draw.rect(screen, color_rgb, (key_x + i * 25, y, 20, 20), border_radius=4)
-            pygame.draw.rect(screen, (200, 200, 200), (key_x + i * 25, y, 20, 20), 2, border_radius=4)
+            slot_x = key_x + i * 23
+            pygame.draw.rect(screen, (45, 50, 60), (slot_x, y, 18, 18), border_radius=4)
+            pygame.draw.rect(screen, color_rgb, (slot_x + 2, y + 2, 14, 14), border_radius=3)
+            pygame.draw.rect(screen, (180, 188, 206), (slot_x, y, 18, 18), 1, border_radius=4)
+
+        if not player.inventory['keys']:
+            empty = self.font_small.render("-", True, COLOR_TEXT_DIM)
+            screen.blit(empty, (key_x, y))
 
     def _draw_active_effects(self, screen, player, x, y):
         """Draw active power-up effects"""
@@ -171,11 +252,12 @@ class UIManager:
         stats = [
             f"Moves: {player.moves}",
             f"Enemies: {len(level.enemy_manager.enemies)}",
+            f"Traps: {len(level.trap_manager.traps)}",
         ]
 
         for i, stat in enumerate(stats):
             text = self.font_small.render(stat, True, COLOR_TEXT)
-            screen.blit(text, (x, y + i * 18))
+            screen.blit(text, (x, y + i * 17))
 
     def _draw_boss_health_bar(self, screen, boss_manager, screen_w):
         """Draw boss health bar at top of screen"""
