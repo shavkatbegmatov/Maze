@@ -227,9 +227,13 @@ class GameFlow:
         return False
 
     def resume_game(self):
-        """Resume the game"""
+        """Resume the game — avvalgi holatga qaytarish (PLAYING yoki PLAYING_3D)"""
         if self.state_manager.can_resume():
-            self.state_manager.transition_to(GameState.PLAYING)
+            prev = self.state_manager.previous_state
+            if prev == GameState.PLAYING_3D:
+                self.state_manager.transition_to(GameState.PLAYING_3D)
+            else:
+                self.state_manager.transition_to(GameState.PLAYING)
             return True
         return False
 
