@@ -46,6 +46,11 @@ class UIManager:
             pygame.draw.rect(surf, (*border_rgb, min(255, alpha + 20)), (0, 0, w, h), border_width, border_radius=radius)
         screen.blit(surf, (x, y))
 
+    @staticmethod
+    def _clamp(value, low, high):
+        """Clamp integer value to range."""
+        return max(low, min(high, value))
+
     def _draw_stat_bar_block(self, screen, label, current, maximum, x, y, width, height, fill_color):
         """Draw modern HUD stat bar with label and numeric values."""
         # Label row
@@ -102,48 +107,62 @@ class UIManager:
         pygame.draw.rect(screen, COLOR_PANEL_BG, (0, panel_y, screen_w, panel_h))
         pygame.draw.line(screen, (80, 88, 106), (0, panel_y), (screen_w, panel_y), 1)
 
-        margin = max(8, panel_h // 10)
-        gap = max(8, panel_h // 12)
+        margin = self._clamp(panel_h // 10, 8, 18)
+        gap = self._clamp(panel_h // 12, 8, 14)
         inner_y = panel_y + margin
-        inner_h = panel_h - margin * 2
-        avail_w = screen_w - margin * 2
+        inner_h = max(56, panel_h - margin * 2)
+        avail_w = max(220, screen_w - margin * 2)
 
-        left_w = min(360, int(avail_w * 0.38))
-        right_w = min(260, int(avail_w * 0.30))
+        # Responsive 3-column split.
+        left_w = self._clamp(int(avail_w * 0.33), 220, 420)
+        right_w = self._clamp(int(avail_w * 0.27), 190, 340)
         center_w = avail_w - left_w - right_w - gap * 2
 
-        min_center_w = 190
+        min_center_w = 180
         if center_w < min_center_w:
             need = min_center_w - center_w
+            shrink_left = min(need, max(0, left_w - 205))
+            left_w -= shrink_left
+            need -= shrink_left
             shrink_right = min(need, max(0, right_w - 180))
             right_w -= shrink_right
-            need -= shrink_right
-            shrink_left = min(need, max(0, left_w - 230))
-            left_w -= shrink_left
             center_w = avail_w - left_w - right_w - gap * 2
 
-        if center_w < 150:
-            center_w = 150
-            right_w = max(150, avail_w - left_w - center_w - gap * 2)
+        max_center_w = 520
+        if center_w > max_center_w:
+            extra = center_w - max_center_w
+            grow_right = min(extra, 340 - right_w)
+            right_w += grow_right
+            extra -= grow_right
+            grow_left = min(extra, 420 - left_w)
+            left_w += grow_left
+            center_w = avail_w - left_w - right_w - gap * 2
 
         left_rect = (margin, inner_y, left_w, inner_h)
         center_rect = (left_rect[0] + left_w + gap, inner_y, center_w, inner_h)
         right_rect = (center_rect[0] + center_w + gap, inner_y, right_w, inner_h)
 
-        self._draw_panel_block(screen, left_rect, (24, 28, 36), (72, 80, 96), radius=12, alpha=235)
-        self._draw_panel_block(screen, center_rect, (24, 28, 36), (72, 80, 96), radius=12, alpha=235)
-        self._draw_panel_block(screen, right_rect, (24, 28, 36), (72, 80, 96), radius=12, alpha=235)
+        radius = self._clamp(inner_h // 6, 8, 14)
+        self._draw_panel_block(screen, left_rect, (24, 28, 36), (72, 80, 96), radius=radius, alpha=235)
+        self._draw_panel_block(screen, center_rect, (24, 28, 36), (72, 80, 96), radius=radius, alpha=235)
+        self._draw_panel_block(screen, right_rect, (24, 28, 36), (72, 80, 96), radius=radius, alpha=235)
 
         # Left: vitals
-        lx = left_rect[0] + 12
-        ly = left_rect[1] + 8
-        lw = left_rect[2] - 24
+        block_pad_x = self._clamp(inner_h // 8, 10, 16)
+        block_pad_y = self._clamp(inner_h // 12, 6, 12)
+        lx = left_rect[0] + block_pad_x
+        ly = left_rect[1] + block_pad_y
+        lw = max(90, left_rect[2] - block_pad_x * 2)
+        hp_h = self._clamp(inner_h // 7, 10, 16)
+        en_h = self._clamp(inner_h // 8, 9, 14)
+        row_gap = self._clamp(inner_h // 10, 8, 14)
+        energy_y = ly + 18 + hp_h + row_gap
         self._draw_stat_bar_block(
             screen,
             "HEALTH",
             player.stats['health'],
             player.stats['max_health'],
-            lx, ly, lw, 14,
+            lx, ly, lw, hp_h,
             COLOR_HEALTH_BAR_FULL if player.get_health_percent() > 0.35 else COLOR_HEALTH_BAR_LOW
         )
         self._draw_stat_bar_block(
@@ -151,32 +170,42 @@ class UIManager:
             "ENERGY",
             player.stats['energy'],
             player.stats['max_energy'],
-            lx, ly + 40, lw, 12, COLOR_ENERGY_BAR
+            lx, energy_y, lw, en_h, COLOR_ENERGY_BAR
         )
 
         effects = player.get_active_effects()
         effects_text = "Effects: " + (", ".join(effects) if effects else "None")
         effects_text = self._fit_text(effects_text, lw)
-        effects_render = self.font_small.render(effects_text, True, COLOR_TEXT_DIM if not effects else COLOR_TEXT_HIGHLIGHT)
-        screen.blit(effects_render, (lx, left_rect[1] + inner_h - 22))
+        effects_y = left_rect[1] + inner_h - self.font_small.get_height() - 6
+        min_effects_y = energy_y + 18 + en_h + 4
+        if effects_y >= min_effects_y:
+            effects_render = self.font_small.render(
+                effects_text, True, COLOR_TEXT_DIM if not effects else COLOR_TEXT_HIGHLIGHT
+            )
+            screen.blit(effects_render, (lx, effects_y))
 
         # Center: timer + run state
         cx = center_rect[0] + center_rect[2] // 2
-        self._draw_timer(screen, level, cx, center_rect[1] + 4)
+        self._draw_timer(screen, level, cx, center_rect[1] + max(4, inner_h // 14))
         run_info_text = f"Maze: {level.cols}x{level.rows}   Difficulty: {DIFFICULTY_NAMES[level.difficulty_level]}"
         run_info_text = self._fit_text(run_info_text, center_rect[2] - 20)
         run_info = self.font_small.render(run_info_text, True, COLOR_TEXT_DIM)
-        run_info_rect = run_info.get_rect(center=(cx, center_rect[1] + inner_h - 20))
+        run_info_rect = run_info.get_rect(center=(cx, center_rect[1] + inner_h - self.font_small.get_height()))
         screen.blit(run_info, run_info_rect)
 
         # Right: keys + stats
         rx = right_rect[0] + 10
-        ry = right_rect[1] + 8
-        self._draw_key_inventory(screen, player, rx, ry, max_width=right_rect[2] - 20, compact=True)
-        compact_stats = f"Moves: {player.moves}   Enemies: {len(level.enemy_manager.enemies)}   Traps: {len(level.trap_manager.traps)}"
-        compact_stats = self._fit_text(compact_stats, right_rect[2] - 20)
+        ry = right_rect[1] + block_pad_y
+        right_w_inner = right_rect[2] - 20
+        compact_mode = (inner_h < 95) or (right_w_inner < 255)
+        self._draw_key_inventory(screen, player, rx, ry, max_width=right_w_inner, compact=compact_mode)
+        if right_w_inner >= 260:
+            compact_stats = f"Moves: {player.moves}   Enemies: {len(level.enemy_manager.enemies)}   Traps: {len(level.trap_manager.traps)}"
+        else:
+            compact_stats = f"M:{player.moves}  E:{len(level.enemy_manager.enemies)}  T:{len(level.trap_manager.traps)}"
+        compact_stats = self._fit_text(compact_stats, right_w_inner)
         stats_render = self.font_small.render(compact_stats, True, COLOR_TEXT)
-        screen.blit(stats_render, (rx, right_rect[1] + inner_h - 22))
+        screen.blit(stats_render, (rx, right_rect[1] + inner_h - self.font_small.get_height() - 6))
 
         # Boss health bar (top, above maze)
         if level.boss_manager.active and level.boss_manager.fight_started:
@@ -259,17 +288,17 @@ class UIManager:
 
     def _draw_key_inventory(self, screen, player, x, y, max_width=None, compact=False):
         """Draw key inventory"""
-        label = self.font_small.render("Keys", True, COLOR_TEXT)
+        label = self.font_small.render("Keys:", True, COLOR_TEXT)
         screen.blit(label, (x, y))
 
         if compact:
             slot_size = 14
             slot_step = 17
-            label_gap = 34
+            label_gap = label.get_width() + 8
         else:
             slot_size = 18
             slot_step = 23
-            label_gap = 44
+            label_gap = label.get_width() + 10
 
         # Draw keys
         key_x = x + label_gap
@@ -298,7 +327,7 @@ class UIManager:
             screen.blit(more, (key_x + draw_count * slot_step, y))
 
         if not keys:
-            empty = self.font_small.render("-", True, COLOR_TEXT_DIM)
+            empty = self.font_small.render("none", True, COLOR_TEXT_DIM)
             screen.blit(empty, (key_x, y))
 
     def _draw_active_effects(self, screen, player, x, y):

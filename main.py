@@ -159,13 +159,23 @@ class MazeGame:
         self.screen_w, self.screen_h = self.display_manager.get_size()
         self._setup_resize_hook()
 
+    def _get_panel_height(self, screen_h=None):
+        """Return HUD panel height (2D responsive, 3D fixed)."""
+        h = self.screen_h if screen_h is None else screen_h
+        if getattr(self, "game_mode", 0) == 1:
+            return PANEL_H
+        return max(96, min(170, int(h * 0.18)))
+
     def _resize_screen_for_level(self, level):
         """Resize screen to fit level using camera system"""
+        panel_h = self._get_panel_height(self.screen_h)
+
         # In fullscreen mode, don't resize window - just recalculate cell size
         if self.display_manager.is_fullscreen():
             screen_w, screen_h = self.display_manager.get_size()
+            panel_h = self._get_panel_height(screen_h)
             cell_size, use_camera = self.camera_manager.handle_screen_resize(
-                screen_w, screen_h, PANEL_H
+                screen_w, screen_h, panel_h
             )
             # Update maze info in camera
             self.camera_manager.camera.maze_cols = level.cols
@@ -174,7 +184,7 @@ class MazeGame:
         else:
             # Let camera calculate optimal settings for windowed mode
             screen_w, screen_h, cell_size, use_camera = self.camera_manager.setup_for_level(
-                level.cols, level.rows, PANEL_H
+                level.cols, level.rows, panel_h
             )
 
             self.cell_size = cell_size
@@ -743,8 +753,9 @@ class MazeGame:
         # Recalculate cell size and camera for new screen size
         level = self.level_manager.get_current_level()
         if level and level.generation_complete:
+            panel_h = self._get_panel_height(new_h)
             cell_size, use_camera = self.camera_manager.handle_screen_resize(
-                new_w, new_h, PANEL_H
+                new_w, new_h, panel_h
             )
             self.cell_size = cell_size
 
@@ -762,8 +773,9 @@ class MazeGame:
         """Callback for screen resize - update camera and cell size"""
         level = self.level_manager.get_current_level()
         if level and level.generation_complete:
+            panel_h = self._get_panel_height(new_height)
             cell_size, use_camera = self.camera_manager.handle_screen_resize(
-                new_width, new_height, PANEL_H
+                new_width, new_height, panel_h
             )
             self.cell_size = cell_size
 
@@ -1396,9 +1408,10 @@ class MazeGame:
             self._draw_minimap(level)
 
         # Draw HUD
+        panel_h = self._get_panel_height(self.screen_h)
         self.ui_manager.draw_hud(
             self.screen, level.player, level,
-            maze_h, self.screen_w, PANEL_H
+            maze_h, self.screen_w, panel_h
         )
 
         # Draw save/load message
