@@ -1434,41 +1434,119 @@ class MazeGame:
         Get top-left origin for 2D maze rendering.
         In non-camera mode, center the maze inside available maze area.
         """
+        layout = self._get_2d_layout_plan()
+        return layout["origin"]
+
+    @staticmethod
+    def _fit_minimap_body_to_strip(strip_w, strip_h, maze_ratio, min_map_w=120, min_map_h=88):
+        """
+        Fit minimap body into a strip while preserving maze aspect.
+        Strip dimensions are for the full minimap card area.
+        """
+        # Card overhead: horizontal=20, vertical=header(<=24)+padding(14)
+        max_body_w = int(strip_w - 20)
+        max_body_h = int(strip_h - 38)
+        if max_body_w < min_map_w or max_body_h < min_map_h:
+            return None
+
+        if maze_ratio <= 0:
+            return None
+
+        map_w = min(max_body_w, int(round(max_body_h * maze_ratio)))
+        map_h = int(round(map_w / maze_ratio))
+
+        if map_h > max_body_h:
+            map_h = max_body_h
+            map_w = int(round(map_h * maze_ratio))
+
+        if map_w < min_map_w or map_h < min_map_h:
+            return None
+
+        return (map_w, map_h)
+
+    def _get_2d_layout_plan(self, level=None):
+        """
+        Build 2D layout plan.
+        Priority:
+        1) If horizontal strip can host bigger minimap => maze left, minimap right.
+        2) Else if vertical strip bigger => maze top, minimap bottom.
+        3) Else fallback to centered maze.
+        """
         camera = self.camera_manager.camera
-        if camera.use_camera:
-            return 0, 0
-
-        level = self.level_manager.get_current_level()
-        if not level:
-            return 0, 0
-
         panel_h = self._get_panel_height(self.screen_h)
         maze_area_h = max(0, self.screen_h - panel_h)
-        maze_px_w = level.cols * self.cell_size
-        maze_px_h = level.rows * self.cell_size
-
-        origin_x = max(0, (self.screen_w - maze_px_w) // 2)
-        origin_y = max(0, (maze_area_h - maze_px_h) // 2)
-        return origin_x, origin_y
-
-    def _get_2d_maze_rect(self, level=None):
-        """Get maze rectangle in screen coordinates for current 2D render mode."""
-        maze_h = self.camera_manager.get_maze_area_height()
-        camera = self.camera_manager.camera
-        if camera.use_camera:
-            vw = int(max(0, camera.viewport_cols * self.cell_size))
-            vh = int(max(0, camera.viewport_rows * self.cell_size))
-            if vw <= 0 or vh <= 0:
-                return pygame.Rect(0, 0, self.screen_w, maze_h)
-            return pygame.Rect(0, 0, min(self.screen_w, vw), min(maze_h, vh))
 
         if level is None:
             level = self.level_manager.get_current_level()
         if not level:
-            return pygame.Rect(0, 0, self.screen_w, maze_h)
+            return {
+                "origin": (0, 0),
+                "maze_rect": pygame.Rect(0, 0, self.screen_w, maze_area_h),
+                "orientation": "center",
+                "preferred_map_body": None,
+            }
 
-        ox, oy = self._get_2d_render_origin()
-        return pygame.Rect(ox, oy, level.cols * self.cell_size, level.rows * self.cell_size)
+        if camera.use_camera:
+            vw = int(max(0, camera.viewport_cols * self.cell_size))
+            vh = int(max(0, camera.viewport_rows * self.cell_size))
+            if vw <= 0 or vh <= 0:
+                maze_rect = pygame.Rect(0, 0, self.screen_w, maze_area_h)
+            else:
+                maze_rect = pygame.Rect(0, 0, min(self.screen_w, vw), min(maze_area_h, vh))
+            return {
+                "origin": (0, 0),
+                "maze_rect": maze_rect,
+                "orientation": "camera",
+                "preferred_map_body": None,
+            }
+
+        maze_px_w = level.cols * self.cell_size
+        maze_px_h = level.rows * self.cell_size
+        maze_ratio = level.cols / max(1, level.rows)
+        margin = 8
+
+        # Horizontal layout candidate: maze left + minimap right.
+        h_strip_w = self.screen_w - (margin + maze_px_w + margin)
+        h_strip_h = maze_area_h - margin * 2
+        h_map = self._fit_minimap_body_to_strip(h_strip_w, h_strip_h, maze_ratio)
+        h_area = h_map[0] * h_map[1] if h_map else 0
+
+        # Vertical layout candidate: maze top + minimap bottom.
+        v_strip_w = self.screen_w - margin * 2
+        v_strip_h = maze_area_h - (margin + maze_px_h + margin)
+        v_map = self._fit_minimap_body_to_strip(v_strip_w, v_strip_h, maze_ratio)
+        v_area = v_map[0] * v_map[1] if v_map else 0
+
+        if h_area > 0 and h_area >= v_area:
+            orientation = "right"
+            origin_x = margin
+            origin_y = max(margin, (maze_area_h - maze_px_h) // 2)
+            preferred_map = h_map
+        elif v_area > 0:
+            orientation = "bottom"
+            origin_x = max(margin, (self.screen_w - maze_px_w) // 2)
+            origin_y = margin
+            preferred_map = v_map
+        else:
+            orientation = "center"
+            origin_x = max(0, (self.screen_w - maze_px_w) // 2)
+            origin_y = max(0, (maze_area_h - maze_px_h) // 2)
+            preferred_map = None
+
+        origin_x = max(0, min(origin_x, max(0, self.screen_w - maze_px_w)))
+        origin_y = max(0, min(origin_y, max(0, maze_area_h - maze_px_h)))
+        maze_rect = pygame.Rect(origin_x, origin_y, maze_px_w, maze_px_h)
+
+        return {
+            "origin": (origin_x, origin_y),
+            "maze_rect": maze_rect,
+            "orientation": orientation,
+            "preferred_map_body": preferred_map,
+        }
+
+    def _get_2d_maze_rect(self, level=None):
+        """Get maze rectangle in screen coordinates for current 2D render mode."""
+        return self._get_2d_layout_plan(level)["maze_rect"]
 
     def _get_2d_wall_width(self):
         """Get 2D wall stroke width in pixels for current cell size."""
@@ -1775,6 +1853,9 @@ class MazeGame:
         max_map_w = max(170, min(520, int(self.screen_w * 0.34)))
         max_map_h = max(120, min(360, int(maze_h * 0.36)))
         maze_ratio = level.cols / max(1, level.rows)
+        layout = self._get_2d_layout_plan(level)
+        layout_mode = layout.get("orientation", "center")
+        preferred_map_body = layout.get("preferred_map_body")
 
         if (max_map_w / max_map_h) > maze_ratio:
             map_h = max_map_h
@@ -1787,7 +1868,7 @@ class MazeGame:
         min_map_h = 88
         map_w = max(min_map_w, map_w)
         map_h = max(min_map_h, map_h)
-        maze_rect = self._get_2d_maze_rect(level)
+        maze_rect = layout["maze_rect"]
         body_pad = 8
 
         def _normalized_size(target_w):
@@ -1805,25 +1886,33 @@ class MazeGame:
             card_w = mw + 20
             card_h = mh + header_h + 14
 
-            strips = []
+            strip_map = {}
             right_w = self.screen_w - (maze_rect.right + body_pad) - body_pad
             right_h = maze_h - body_pad * 2
-            strips.append(("right", maze_rect.right + body_pad, body_pad, right_w, right_h))
+            strip_map["right"] = (maze_rect.right + body_pad, body_pad, right_w, right_h)
 
             left_w = maze_rect.left - body_pad * 2
             left_h = maze_h - body_pad * 2
-            strips.append(("left", body_pad, body_pad, left_w, left_h))
+            strip_map["left"] = (body_pad, body_pad, left_w, left_h)
 
             top_w = self.screen_w - body_pad * 2
             top_h = maze_rect.top - body_pad * 2
-            strips.append(("top", body_pad, body_pad, top_w, top_h))
+            strip_map["top"] = (body_pad, body_pad, top_w, top_h)
 
             bottom_y = maze_rect.bottom + body_pad
             bottom_w = self.screen_w - body_pad * 2
             bottom_h = maze_h - bottom_y - body_pad
-            strips.append(("bottom", body_pad, bottom_y, bottom_w, bottom_h))
+            strip_map["bottom"] = (body_pad, bottom_y, bottom_w, bottom_h)
 
-            for name, sx, sy, sw, sh in strips:
+            if layout_mode == "right":
+                strip_order = ("right", "bottom", "top", "left")
+            elif layout_mode == "bottom":
+                strip_order = ("bottom", "right", "left", "top")
+            else:
+                strip_order = ("right", "left", "top", "bottom")
+
+            for name in strip_order:
+                sx, sy, sw, sh = strip_map[name]
                 if sw < card_w or sh < card_h:
                     continue
 
@@ -1860,14 +1949,19 @@ class MazeGame:
                 py = max(min_y, min(max_y, int(py)))
                 return px, py
 
-            candidates = [
-                _clamp_pos(self.screen_w - mw - pad, pad + header),              # top-right
-                _clamp_pos(body_pad, pad + header),                               # top-left
-                _clamp_pos(self.screen_w - mw - pad, maze_h - mh - body_pad),    # bottom-right
-                _clamp_pos(body_pad, maze_h - mh - body_pad),                     # bottom-left
-                _clamp_pos((self.screen_w - mw) // 2, pad + header),              # top-center
-                _clamp_pos((self.screen_w - mw) // 2, maze_h - mh - body_pad),    # bottom-center
-            ]
+            top_right = _clamp_pos(self.screen_w - mw - pad, pad + header)
+            top_left = _clamp_pos(body_pad, pad + header)
+            bottom_right = _clamp_pos(self.screen_w - mw - pad, maze_h - mh - body_pad)
+            bottom_left = _clamp_pos(body_pad, maze_h - mh - body_pad)
+            top_center = _clamp_pos((self.screen_w - mw) // 2, pad + header)
+            bottom_center = _clamp_pos((self.screen_w - mw) // 2, maze_h - mh - body_pad)
+
+            if layout_mode == "right":
+                candidates = [top_right, bottom_right, top_center, bottom_center, top_left, bottom_left]
+            elif layout_mode == "bottom":
+                candidates = [bottom_center, bottom_right, bottom_left, top_center, top_right, top_left]
+            else:
+                candidates = [top_right, top_left, bottom_right, bottom_left, top_center, bottom_center]
 
             best = None
             for px, py in candidates:
@@ -1891,6 +1985,8 @@ class MazeGame:
                 seen_sizes.add(key)
                 size_candidates.append(key)
 
+        if preferred_map_body:
+            _add_size(preferred_map_body[0], preferred_map_body[1])
         _add_size(map_w, map_h)
         for scale in (0.9, 0.8, 0.7, 0.6):
             sw, sh = _normalized_size(map_w * scale)
