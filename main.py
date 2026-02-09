@@ -446,9 +446,10 @@ class MazeGame:
             animated=True
         )
 
-        # For 3D mode, use fixed screen size
+        # For 3D mode, keep current window size and only init renderer.
         if self.game_mode == 1:
-            self._create_screen(800, 600)
+            self.screen_w, self.screen_h = self.display_manager.get_size()
+            self.screen = self.display_manager.get_screen()
             self._init_3d_renderer()
             # Player 3D will be initialized after generation completes
         else:
@@ -533,7 +534,8 @@ class MazeGame:
 
                 if saved_mode == 1:
                     # 3D rejim
-                    self._create_screen(800, 600)
+                    self.screen_w, self.screen_h = self.display_manager.get_size()
+                    self.screen = self.display_manager.get_screen()
                     self._init_3d_renderer()
 
                     # Player3D tiklash
