@@ -1723,62 +1723,144 @@ class MazeGame:
         self.screen.blit(fog_surface, (0, 0))
 
     def _draw_minimap(self, level):
-        """Draw minimap when in camera mode"""
-        # Minimap dimensions
-        map_w = 176
-        map_h = 118
-        map_x = self.screen_w - map_w - 14
-        map_y = 14
+        """Draw tactical minimap with readable walls and dynamic fullscreen scaling."""
+        maze_h = self.camera_manager.get_maze_area_height()
+        if maze_h <= 70:
+            return
 
-        # Card background
-        card_rect = pygame.Rect(map_x - 8, map_y - 24, map_w + 16, map_h + 34)
+        # Dynamic minimap size by maze aspect and current window.
+        pad = 14 if self.screen_w < 1280 else 18
+        max_map_w = max(170, min(520, int(self.screen_w * 0.34)))
+        max_map_h = max(120, min(360, int(maze_h * 0.36)))
+        maze_ratio = level.cols / max(1, level.rows)
+
+        if (max_map_w / max_map_h) > maze_ratio:
+            map_h = max_map_h
+            map_w = int(map_h * maze_ratio)
+        else:
+            map_w = max_map_w
+            map_h = int(map_w / maze_ratio)
+
+        map_w = max(150, map_w)
+        map_h = max(110, map_h)
+        map_x = self.screen_w - map_w - pad
+        map_y = pad
+        if map_y + map_h > maze_h - 8:
+            map_y = max(8, maze_h - map_h - 8)
+
+        header_h = 20 if map_h < 190 else 24
+        card_rect = pygame.Rect(map_x - 10, map_y - (header_h + 8), map_w + 20, map_h + header_h + 14)
         card = pygame.Surface((card_rect.w, card_rect.h), pygame.SRCALPHA)
-        pygame.draw.rect(card, (22, 26, 34, 224), (0, 0, card_rect.w, card_rect.h), border_radius=12)
-        pygame.draw.rect(card, (88, 98, 118, 230), (0, 0, card_rect.w, card_rect.h), 1, border_radius=12)
+        pygame.draw.rect(card, (22, 26, 34, 228), (0, 0, card_rect.w, card_rect.h), border_radius=12)
+        pygame.draw.rect(card, (88, 98, 118, 235), (0, 0, card_rect.w, card_rect.h), 1, border_radius=12)
         self.screen.blit(card, card_rect.topleft)
 
-        # Header
-        font = pygame.font.SysFont("consolas", 11, bold=True)
-        label = font.render("MINIMAP", True, (190, 198, 216))
-        self.screen.blit(label, (map_x - 1, map_y - 19))
+        label_size = 11 if map_w < 220 else 13
+        label_font = pygame.font.SysFont("consolas", label_size, bold=True)
+        label = label_font.render("MINIMAP", True, (198, 208, 224))
+        self.screen.blit(label, (map_x, map_y - header_h))
 
-        # Minimap background
-        pygame.draw.rect(self.screen, (36, 42, 54), (map_x, map_y, map_w, map_h), border_radius=6)
-        pygame.draw.rect(self.screen, (76, 86, 102), (map_x, map_y, map_w, map_h), 1, border_radius=6)
+        mode_label = "CAMERA" if self.camera_manager.uses_camera() else "FULL"
+        mode_render = label_font.render(mode_label, True, (150, 164, 188))
+        mode_rect = mode_render.get_rect(topright=(map_x + map_w, map_y - header_h))
+        self.screen.blit(mode_render, mode_rect)
 
-        # Scale factors
+        mini = pygame.Surface((map_w, map_h), pygame.SRCALPHA)
+        pygame.draw.rect(mini, (36, 42, 54), (0, 0, map_w, map_h), border_radius=6)
+        pygame.draw.rect(mini, (76, 86, 102), (0, 0, map_w, map_h), 1, border_radius=6)
+
         scale_x = map_w / level.cols
         scale_y = map_h / level.rows
+        line_w = 1 if min(map_w, map_h) < 220 else 2
 
-        # Draw explored areas
-        if self.fog_manager.fog and self.fog_manager.enabled:
-            for y in range(level.rows):
-                for x in range(level.cols):
-                    if self.fog_manager.fog.explored[y][x]:
-                        px = map_x + int(x * scale_x)
-                        py = map_y + int(y * scale_y)
-                        pygame.draw.rect(self.screen, (86, 94, 108), (px, py, max(1, int(scale_x)), max(1, int(scale_y))))
-        else:
-            # No fog - show entire maze
-            pygame.draw.rect(self.screen, (78, 86, 98), (map_x, map_y, map_w, map_h), border_radius=6)
+        fog_enabled = bool(self.fog_manager.fog and self.fog_manager.enabled)
+        explored = self.fog_manager.fog.explored if fog_enabled else None
 
-        # Draw goal
-        gx = map_x + int(level.goal_pos[0] * scale_x)
-        gy = map_y + int(level.goal_pos[1] * scale_y)
-        pygame.draw.rect(self.screen, COLOR_GOAL, (gx, gy, max(4, int(scale_x * 2)), max(4, int(scale_y * 2))), border_radius=2)
+        def _cell_known(cx, cy):
+            return (not fog_enabled) or bool(explored[cy][cx])
 
-        # Draw player
-        px = map_x + int(level.player.x * scale_x)
-        py = map_y + int(level.player.y * scale_y)
-        pygame.draw.rect(self.screen, COLOR_PLAYER, (px, py, max(4, int(scale_x * 2)), max(4, int(scale_y * 2))), border_radius=2)
+        # Fill known floor cells first, then draw walls for better readability.
+        floor_color = (86, 96, 114)
+        for y in range(level.rows):
+            y0 = int(round(y * scale_y))
+            y1 = int(round((y + 1) * scale_y))
+            for x in range(level.cols):
+                if not _cell_known(x, y):
+                    continue
+                x0 = int(round(x * scale_x))
+                x1 = int(round((x + 1) * scale_x))
+                pygame.draw.rect(mini, floor_color, (x0, y0, max(1, x1 - x0), max(1, y1 - y0)))
 
-        # Draw viewport rectangle
-        camera = self.camera_manager.camera
-        vx = map_x + int(camera.camera_x * scale_x)
-        vy = map_y + int(camera.camera_y * scale_y)
-        vw = int(camera.viewport_cols * scale_x)
-        vh = int(camera.viewport_rows * scale_y)
-        pygame.draw.rect(self.screen, (214, 224, 240), (vx, vy, vw, vh), 1)
+        wall_color = (228, 234, 244)
+        for y in range(level.rows):
+            y0 = int(round(y * scale_y))
+            y1 = int(round((y + 1) * scale_y))
+            row_idx = y * level.cols
+            for x in range(level.cols):
+                if not _cell_known(x, y):
+                    continue
+
+                x0 = int(round(x * scale_x))
+                x1 = int(round((x + 1) * scale_x))
+                w = level.walls[row_idx + x]
+
+                # Draw each present wall edge; this gives a clear minimap topology.
+                if (w & TOP) != 0:
+                    pygame.draw.line(mini, wall_color, (x0, y0), (x1, y0), line_w)
+                if (w & LEFT) != 0:
+                    pygame.draw.line(mini, wall_color, (x0, y0), (x0, y1), line_w)
+                if (w & BOTTOM) != 0:
+                    pygame.draw.line(mini, wall_color, (x0, y1), (x1, y1), line_w)
+                if (w & RIGHT) != 0:
+                    pygame.draw.line(mini, wall_color, (x1, y0), (x1, y1), line_w)
+
+        marker_r = max(3, int(min(scale_x, scale_y) * 0.42) + 2)
+
+        # Goal marker (show only if discovered when fog is enabled).
+        gx, gy = level.goal_pos
+        goal_known = True
+        if fog_enabled and 0 <= gy < level.rows and 0 <= gx < level.cols:
+            goal_known = bool(explored[gy][gx])
+        if goal_known:
+            gpx = int((gx + 0.5) * scale_x)
+            gpy = int((gy + 0.5) * scale_y)
+            pygame.draw.circle(mini, (40, 48, 60), (gpx, gpy), marker_r + 2)
+            pygame.draw.circle(mini, COLOR_GOAL, (gpx, gpy), marker_r)
+
+        # Enemy markers (known cells only in fog mode).
+        enemy_r = max(2, marker_r - 2)
+        for enemy in level.enemy_manager.enemies:
+            if not getattr(enemy, "alive", True):
+                continue
+            ex = int(enemy.x)
+            ey = int(enemy.y)
+            if ex < 0 or ex >= level.cols or ey < 0 or ey >= level.rows:
+                continue
+            if fog_enabled and not explored[ey][ex]:
+                continue
+            epx = int((enemy.x + 0.5) * scale_x)
+            epy = int((enemy.y + 0.5) * scale_y)
+            pygame.draw.circle(mini, (255, 110, 110), (epx, epy), enemy_r)
+
+        # Player marker + vision hint ring.
+        ppx = int((level.player.x + 0.5) * scale_x)
+        ppy = int((level.player.y + 0.5) * scale_y)
+        vision_range = int(level.player.stats.get('vision_range', 0))
+        vision_px = max(4, int(vision_range * ((scale_x + scale_y) * 0.5)))
+        pygame.draw.circle(mini, (90, 210, 255, 60), (ppx, ppy), vision_px, 1)
+        pygame.draw.circle(mini, (20, 28, 38), (ppx, ppy), marker_r + 2)
+        pygame.draw.circle(mini, COLOR_PLAYER, (ppx, ppy), marker_r)
+
+        # Camera viewport rectangle (only useful when camera mode is active).
+        if self.camera_manager.uses_camera():
+            camera = self.camera_manager.camera
+            vx = int(round(camera.camera_x * scale_x))
+            vy = int(round(camera.camera_y * scale_y))
+            vw = max(2, int(round(camera.viewport_cols * scale_x)))
+            vh = max(2, int(round(camera.viewport_rows * scale_y)))
+            pygame.draw.rect(mini, (214, 224, 240), (vx, vy, vw, vh), 1)
+
+        self.screen.blit(mini, (map_x, map_y))
 
     def _draw_save_message(self):
         """Draw save/load message"""

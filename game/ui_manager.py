@@ -23,6 +23,7 @@ class UIManager:
         self.font_medium = None
         self.font_large = None
         self.font_title = None
+        self._font_cache = {}
         self._crosshair_color = (200, 200, 200)
         self._init_fonts()
 
@@ -51,6 +52,21 @@ class UIManager:
         """Clamp integer value to range."""
         return max(low, min(high, value))
 
+    def _get_cached_font(self, size, bold=False):
+        """Get cached font for the given size."""
+        key = (int(size), bool(bold))
+        if key not in self._font_cache:
+            self._font_cache[key] = pygame.font.SysFont("consolas", key[0], bold=key[1])
+        return self._font_cache[key]
+
+    def _get_hud_fonts(self, panel_h):
+        """Get HUD font set scaled to panel height."""
+        scale = max(0.9, min(1.75, panel_h / 108.0))
+        small = self._get_cached_font(round(15 * scale))
+        medium = self._get_cached_font(round(20 * scale))
+        large = self._get_cached_font(round(30 * scale), bold=True)
+        return small, medium, large
+
     def _draw_stat_bar_block(self, screen, label, current, maximum, x, y, width, height, fill_color):
         """Draw modern HUD stat bar with label and numeric values."""
         # Label row
@@ -60,7 +76,7 @@ class UIManager:
         value_rect = value_text.get_rect(right=x + width, top=y)
         screen.blit(value_text, value_rect)
 
-        bar_y = y + 18
+        bar_y = y + self.font_small.get_height() + 2
         bar_bg = (46, 52, 64)
         pygame.draw.rect(screen, bar_bg, (x, bar_y, width, height), border_radius=8)
 
@@ -103,113 +119,114 @@ class UIManager:
             screen_w: Screen width
             panel_h: Panel height
         """
-        # Base panel
-        pygame.draw.rect(screen, COLOR_PANEL_BG, (0, panel_y, screen_w, panel_h))
-        pygame.draw.line(screen, (80, 88, 106), (0, panel_y), (screen_w, panel_y), 1)
+        orig_small = self.font_small
+        orig_medium = self.font_medium
+        orig_large = self.font_large
+        self.font_small, self.font_medium, self.font_large = self._get_hud_fonts(panel_h)
 
-        margin = self._clamp(panel_h // 10, 8, 18)
-        gap = self._clamp(panel_h // 12, 8, 14)
-        inner_y = panel_y + margin
-        inner_h = max(56, panel_h - margin * 2)
-        avail_w = max(220, screen_w - margin * 2)
+        try:
+            # Base panel
+            pygame.draw.rect(screen, COLOR_PANEL_BG, (0, panel_y, screen_w, panel_h))
+            pygame.draw.line(screen, (80, 88, 106), (0, panel_y), (screen_w, panel_y), 1)
 
-        # Responsive 3-column split.
-        left_w = self._clamp(int(avail_w * 0.33), 220, 420)
-        right_w = self._clamp(int(avail_w * 0.27), 190, 340)
-        center_w = avail_w - left_w - right_w - gap * 2
+            margin = self._clamp(panel_h // 10, 8, 20)
+            gap = self._clamp(panel_h // 12, 8, 16)
+            inner_y = panel_y + margin
+            inner_h = max(56, panel_h - margin * 2)
+            avail_w = max(220, screen_w - margin * 2)
 
-        min_center_w = 180
-        if center_w < min_center_w:
-            need = min_center_w - center_w
-            shrink_left = min(need, max(0, left_w - 205))
-            left_w -= shrink_left
-            need -= shrink_left
-            shrink_right = min(need, max(0, right_w - 180))
-            right_w -= shrink_right
+            # Responsive 3-column split that still looks proportional on fullscreen.
+            left_w = self._clamp(int(avail_w * 0.34), 230, 560)
+            right_w = self._clamp(int(avail_w * 0.28), 200, 460)
             center_w = avail_w - left_w - right_w - gap * 2
 
-        max_center_w = 520
-        if center_w > max_center_w:
-            extra = center_w - max_center_w
-            grow_right = min(extra, 340 - right_w)
-            right_w += grow_right
-            extra -= grow_right
-            grow_left = min(extra, 420 - left_w)
-            left_w += grow_left
-            center_w = avail_w - left_w - right_w - gap * 2
+            min_center_w = 210
+            if center_w < min_center_w:
+                need = min_center_w - center_w
+                shrink_left = min(need, max(0, left_w - 220))
+                left_w -= shrink_left
+                need -= shrink_left
+                shrink_right = min(need, max(0, right_w - 190))
+                right_w -= shrink_right
+                center_w = avail_w - left_w - right_w - gap * 2
 
-        left_rect = (margin, inner_y, left_w, inner_h)
-        center_rect = (left_rect[0] + left_w + gap, inner_y, center_w, inner_h)
-        right_rect = (center_rect[0] + center_w + gap, inner_y, right_w, inner_h)
+            left_rect = (margin, inner_y, left_w, inner_h)
+            center_rect = (left_rect[0] + left_w + gap, inner_y, center_w, inner_h)
+            right_rect = (center_rect[0] + center_w + gap, inner_y, right_w, inner_h)
 
-        radius = self._clamp(inner_h // 6, 8, 14)
-        self._draw_panel_block(screen, left_rect, (24, 28, 36), (72, 80, 96), radius=radius, alpha=235)
-        self._draw_panel_block(screen, center_rect, (24, 28, 36), (72, 80, 96), radius=radius, alpha=235)
-        self._draw_panel_block(screen, right_rect, (24, 28, 36), (72, 80, 96), radius=radius, alpha=235)
+            radius = self._clamp(inner_h // 6, 8, 14)
+            self._draw_panel_block(screen, left_rect, (24, 28, 36), (72, 80, 96), radius=radius, alpha=235)
+            self._draw_panel_block(screen, center_rect, (24, 28, 36), (72, 80, 96), radius=radius, alpha=235)
+            self._draw_panel_block(screen, right_rect, (24, 28, 36), (72, 80, 96), radius=radius, alpha=235)
 
-        # Left: vitals
-        block_pad_x = self._clamp(inner_h // 8, 10, 16)
-        block_pad_y = self._clamp(inner_h // 12, 6, 12)
-        lx = left_rect[0] + block_pad_x
-        ly = left_rect[1] + block_pad_y
-        lw = max(90, left_rect[2] - block_pad_x * 2)
-        hp_h = self._clamp(inner_h // 7, 10, 16)
-        en_h = self._clamp(inner_h // 8, 9, 14)
-        row_gap = self._clamp(inner_h // 10, 8, 14)
-        energy_y = ly + 18 + hp_h + row_gap
-        self._draw_stat_bar_block(
-            screen,
-            "HEALTH",
-            player.stats['health'],
-            player.stats['max_health'],
-            lx, ly, lw, hp_h,
-            COLOR_HEALTH_BAR_FULL if player.get_health_percent() > 0.35 else COLOR_HEALTH_BAR_LOW
-        )
-        self._draw_stat_bar_block(
-            screen,
-            "ENERGY",
-            player.stats['energy'],
-            player.stats['max_energy'],
-            lx, energy_y, lw, en_h, COLOR_ENERGY_BAR
-        )
-
-        effects = player.get_active_effects()
-        effects_text = "Effects: " + (", ".join(effects) if effects else "None")
-        effects_text = self._fit_text(effects_text, lw)
-        effects_y = left_rect[1] + inner_h - self.font_small.get_height() - 6
-        min_effects_y = energy_y + 18 + en_h + 4
-        if effects_y >= min_effects_y:
-            effects_render = self.font_small.render(
-                effects_text, True, COLOR_TEXT_DIM if not effects else COLOR_TEXT_HIGHLIGHT
+            # Left: vitals
+            block_pad_x = self._clamp(inner_h // 8, 10, 16)
+            block_pad_y = self._clamp(inner_h // 12, 6, 12)
+            lx = left_rect[0] + block_pad_x
+            ly = left_rect[1] + block_pad_y
+            lw = max(90, left_rect[2] - block_pad_x * 2)
+            hp_h = self._clamp(inner_h // 7, 10, 18)
+            en_h = self._clamp(inner_h // 8, 9, 16)
+            row_gap = self._clamp(inner_h // 10, 8, 16)
+            label_h = self.font_small.get_height()
+            energy_y = ly + label_h + hp_h + row_gap
+            self._draw_stat_bar_block(
+                screen,
+                "HEALTH",
+                player.stats['health'],
+                player.stats['max_health'],
+                lx, ly, lw, hp_h,
+                COLOR_HEALTH_BAR_FULL if player.get_health_percent() > 0.35 else COLOR_HEALTH_BAR_LOW
             )
-            screen.blit(effects_render, (lx, effects_y))
+            self._draw_stat_bar_block(
+                screen,
+                "ENERGY",
+                player.stats['energy'],
+                player.stats['max_energy'],
+                lx, energy_y, lw, en_h, COLOR_ENERGY_BAR
+            )
 
-        # Center: timer + run state
-        cx = center_rect[0] + center_rect[2] // 2
-        self._draw_timer(screen, level, cx, center_rect[1] + max(4, inner_h // 14))
-        run_info_text = f"Maze: {level.cols}x{level.rows}   Difficulty: {DIFFICULTY_NAMES[level.difficulty_level]}"
-        run_info_text = self._fit_text(run_info_text, center_rect[2] - 20)
-        run_info = self.font_small.render(run_info_text, True, COLOR_TEXT_DIM)
-        run_info_rect = run_info.get_rect(center=(cx, center_rect[1] + inner_h - self.font_small.get_height()))
-        screen.blit(run_info, run_info_rect)
+            effects = player.get_active_effects()
+            effects_text = "Effects: " + (", ".join(effects) if effects else "None")
+            effects_text = self._fit_text(effects_text, lw)
+            effects_y = left_rect[1] + inner_h - self.font_small.get_height() - 6
+            min_effects_y = energy_y + label_h + en_h + 4
+            if effects_y >= min_effects_y:
+                effects_render = self.font_small.render(
+                    effects_text, True, COLOR_TEXT_DIM if not effects else COLOR_TEXT_HIGHLIGHT
+                )
+                screen.blit(effects_render, (lx, effects_y))
 
-        # Right: keys + stats
-        rx = right_rect[0] + 10
-        ry = right_rect[1] + block_pad_y
-        right_w_inner = right_rect[2] - 20
-        compact_mode = (inner_h < 95) or (right_w_inner < 255)
-        self._draw_key_inventory(screen, player, rx, ry, max_width=right_w_inner, compact=compact_mode)
-        if right_w_inner >= 260:
-            compact_stats = f"Moves: {player.moves}   Enemies: {len(level.enemy_manager.enemies)}   Traps: {len(level.trap_manager.traps)}"
-        else:
-            compact_stats = f"M:{player.moves}  E:{len(level.enemy_manager.enemies)}  T:{len(level.trap_manager.traps)}"
-        compact_stats = self._fit_text(compact_stats, right_w_inner)
-        stats_render = self.font_small.render(compact_stats, True, COLOR_TEXT)
-        screen.blit(stats_render, (rx, right_rect[1] + inner_h - self.font_small.get_height() - 6))
+            # Center: timer + run state
+            cx = center_rect[0] + center_rect[2] // 2
+            self._draw_timer(screen, level, cx, center_rect[1] + max(4, inner_h // 14))
+            run_info_text = f"Maze: {level.cols}x{level.rows}   Difficulty: {DIFFICULTY_NAMES[level.difficulty_level]}"
+            run_info_text = self._fit_text(run_info_text, center_rect[2] - 20)
+            run_info = self.font_small.render(run_info_text, True, COLOR_TEXT_DIM)
+            run_info_rect = run_info.get_rect(center=(cx, center_rect[1] + inner_h - self.font_small.get_height()))
+            screen.blit(run_info, run_info_rect)
 
-        # Boss health bar (top, above maze)
-        if level.boss_manager.active and level.boss_manager.fight_started:
-            self._draw_boss_health_bar(screen, level.boss_manager, screen_w)
+            # Right: keys + stats
+            rx = right_rect[0] + 10
+            ry = right_rect[1] + block_pad_y
+            right_w_inner = right_rect[2] - 20
+            compact_mode = (inner_h < 95) or (right_w_inner < 255)
+            self._draw_key_inventory(screen, player, rx, ry, max_width=right_w_inner, compact=compact_mode)
+            if right_w_inner >= 280:
+                compact_stats = f"Moves: {player.moves}   Enemies: {len(level.enemy_manager.enemies)}   Traps: {len(level.trap_manager.traps)}"
+            else:
+                compact_stats = f"M:{player.moves}  E:{len(level.enemy_manager.enemies)}  T:{len(level.trap_manager.traps)}"
+            compact_stats = self._fit_text(compact_stats, right_w_inner)
+            stats_render = self.font_small.render(compact_stats, True, COLOR_TEXT)
+            screen.blit(stats_render, (rx, right_rect[1] + inner_h - self.font_small.get_height() - 6))
+
+            # Boss health bar (top, above maze)
+            if level.boss_manager.active and level.boss_manager.fight_started:
+                self._draw_boss_health_bar(screen, level.boss_manager, screen_w)
+        finally:
+            self.font_small = orig_small
+            self.font_medium = orig_medium
+            self.font_large = orig_large
 
     def _draw_health_bar(self, screen, player, x, y, width, height):
         """Draw health bar"""
@@ -278,12 +295,12 @@ class UIManager:
                 color = COLOR_TEXT
 
             text = self.font_large.render(time_str, True, color)
-            text_rect = text.get_rect(center=(x, y + 15))
+            text_rect = text.get_rect(center=(x, y + self.font_large.get_height() // 2))
             screen.blit(text, text_rect)
         else:
             # No time limit
             text = self.font_medium.render("No Time Limit", True, COLOR_TEXT_DIM)
-            text_rect = text.get_rect(center=(x, y + 15))
+            text_rect = text.get_rect(center=(x, y + self.font_medium.get_height() // 2))
             screen.blit(text, text_rect)
 
     def _draw_key_inventory(self, screen, player, x, y, max_width=None, compact=False):
@@ -292,12 +309,12 @@ class UIManager:
         screen.blit(label, (x, y))
 
         if compact:
-            slot_size = 14
-            slot_step = 17
+            slot_size = max(12, self.font_small.get_height() - 2)
+            slot_step = slot_size + 3
             label_gap = label.get_width() + 8
         else:
-            slot_size = 18
-            slot_step = 23
+            slot_size = max(16, self.font_small.get_height() + 2)
+            slot_step = slot_size + 5
             label_gap = label.get_width() + 10
 
         # Draw keys
