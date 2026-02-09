@@ -1403,9 +1403,9 @@ class MazeGame:
         # Draw fog of war with camera support
         self._render_fog(level)
 
-        # Draw camera mode indicator
-        if self.camera_manager.uses_camera():
-            self._draw_minimap(level)
+        # Draw minimap in 2D mode regardless of camera state.
+        # Previously it disappeared when resize made the maze fit the screen.
+        self._draw_minimap(level)
 
         # Draw HUD
         panel_h = self._get_panel_height(self.screen_h)
