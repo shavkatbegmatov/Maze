@@ -281,10 +281,26 @@ class Renderer3D:
             screen_width, screen_height: Screen dimensions
             fov: Field of view in degrees
         """
+        # Target render area on actual screen (top viewport above HUD)
         self.screen_width = screen_width
         self.screen_height = screen_height
-        self.fov = fov
         self.render_height = screen_height
+        self.fov = fov
+
+        # Internal render resolution scaling for fullscreen performance.
+        # The scene is rendered to a smaller buffer and scaled up to target area.
+        self._base_render_pixels = 1280 * 720
+        self._min_scale = 0.55
+        self._max_scale = 1.0
+        self._quality_boost = 1.0
+        self._quality_hold_frames = 0
+        self._ema_frame_ms = 1000.0 / 60.0
+        self._quality_warmup_frames = 120
+        self._min_internal_width = 480
+        self._min_internal_height = 270
+        self.internal_width = screen_width
+        self.internal_height = screen_height
+        self._internal_scale = 1.0
 
         # Initialize components
         self.raycaster = Raycaster(fov=fov, num_rays=screen_width)
@@ -298,11 +314,12 @@ class Renderer3D:
         self._tex_ns = np.ascontiguousarray(self.wall_texture_arrays['ns'], dtype=np.uint8)
         self._tex_ew = np.ascontiguousarray(self.wall_texture_arrays['ew'], dtype=np.uint8)
 
-        # Frame buffer - RGB array (width, height, 3)
-        self.frame_buffer = np.zeros((screen_width, screen_height, 3), dtype=np.uint8)
-
-        # Z-buffer for sprite sorting
-        self.z_buffer = np.full(screen_width, float('inf'), dtype=np.float32)
+        # Frame buffers and surfaces are (re)allocated in _resize_internal_buffers()
+        self.frame_buffer = None
+        self.z_buffer = None
+        self._render_surface = None
+        self._scaled_surface = None
+        self._resize_internal_buffers(screen_width, screen_height, reset_quality=True, force=True)
 
         # Sprite FOV korreksiya koeffitsienti
         self._sprite_fov_factor = 1.0 / math.tan(self.raycaster.half_fov_rad)
@@ -310,6 +327,89 @@ class Renderer3D:
         # Pre-rendered sprite surfaces
         self._sprite_cache = {}
         self._init_sprite_surfaces()
+
+    def _compute_base_scale(self, target_w, target_h):
+        """Compute baseline internal render scale from target pixel count."""
+        pixels = float(target_w * target_h)
+        if pixels <= float(self._base_render_pixels):
+            return 1.0
+        scale = math.sqrt(float(self._base_render_pixels) / pixels)
+        return max(self._min_scale, min(self._max_scale, scale))
+
+    def _resize_internal_buffers(self, target_w, target_h, reset_quality=False, force=False):
+        """Resize internal render resolution and dependent buffers."""
+        self.screen_width = int(max(1, target_w))
+        self.screen_height = int(max(1, target_h))
+        self.render_height = int(max(1, target_h))
+
+        if reset_quality:
+            self._quality_boost = 1.0
+            self._quality_hold_frames = 0
+            self._quality_warmup_frames = 90
+
+        base_scale = self._compute_base_scale(self.screen_width, self.render_height)
+        internal_scale = max(self._min_scale, min(self._max_scale, base_scale * self._quality_boost))
+        int_w = int(round(self.screen_width * internal_scale))
+        int_h = int(round(self.render_height * internal_scale))
+        int_w = min(self.screen_width, max(self._min_internal_width, int_w))
+        int_h = min(self.render_height, max(self._min_internal_height, int_h))
+
+        same_internal = (
+            self.frame_buffer is not None and
+            int_w == self.internal_width and int_h == self.internal_height
+        )
+        same_scaled_surface = (
+            self._scaled_surface is not None and
+            self._scaled_surface.get_size() == (self.screen_width, self.render_height)
+        )
+
+        if same_internal:
+            self._internal_scale = min(
+                int_w / float(max(1, self.screen_width)),
+                int_h / float(max(1, self.render_height))
+            )
+            if not same_scaled_surface:
+                self._scaled_surface = pygame.Surface((self.screen_width, self.render_height))
+            return
+
+        self._internal_scale = min(
+            int_w / float(max(1, self.screen_width)),
+            int_h / float(max(1, self.render_height))
+        )
+        self.internal_width = int_w
+        self.internal_height = int_h
+
+        self.raycaster.set_resolution(self.internal_width)
+        self.frame_buffer = np.zeros((self.internal_width, self.internal_height, 3), dtype=np.uint8)
+        self.z_buffer = np.full(self.internal_width, float('inf'), dtype=np.float32)
+        self._render_surface = pygame.Surface((self.internal_width, self.internal_height))
+        self._scaled_surface = pygame.Surface((self.screen_width, self.render_height))
+
+    def _update_adaptive_quality(self, frame_ms):
+        """Dynamically adjust internal render scale to keep FPS stable."""
+        if self._quality_warmup_frames > 0:
+            self._quality_warmup_frames -= 1
+            return
+
+        # Exponential moving average smooths spikes.
+        self._ema_frame_ms = self._ema_frame_ms * 0.9 + frame_ms * 0.1
+
+        if self._quality_hold_frames > 0:
+            self._quality_hold_frames -= 1
+            return
+
+        # If frame time is consistently high, reduce quality quickly.
+        if self._ema_frame_ms > 23.0 and self._quality_boost > 0.68:
+            self._quality_boost = max(0.65, self._quality_boost - 0.08)
+            self._quality_hold_frames = 45
+            self._resize_internal_buffers(self.screen_width, self.render_height, reset_quality=False, force=True)
+            return
+
+        # If there is headroom, restore quality slowly.
+        if self._ema_frame_ms < 14.5 and self._quality_boost < 1.0:
+            self._quality_boost = min(1.0, self._quality_boost + 0.04)
+            self._quality_hold_frames = 90
+            self._resize_internal_buffers(self.screen_width, self.render_height, reset_quality=False, force=True)
 
     def _init_sprite_surfaces(self):
         """Pre-render sprite surfaces for fast blitting"""
@@ -594,14 +694,7 @@ class Renderer3D:
 
     def set_render_area(self, width, height):
         """Update render area dimensions"""
-        self.screen_width = width
-        self.screen_height = height
-        self.render_height = height
-        self.raycaster.set_resolution(width)
-
-        # Reinitialize frame buffer
-        self.frame_buffer = np.zeros((width, height, 3), dtype=np.uint8)
-        self.z_buffer = np.full(width, float('inf'), dtype=np.float32)
+        self._resize_internal_buffers(width, height, reset_quality=True, force=False)
 
     def render(self, screen, player, level, fog_manager=None):
         """
@@ -613,6 +706,8 @@ class Renderer3D:
             level: Level instance
             fog_manager: Optional FogManager for visibility
         """
+        frame_start = pygame.time.get_ticks()
+
         # Clear z-buffer
         self.z_buffer.fill(float('inf'))
 
@@ -622,21 +717,26 @@ class Renderer3D:
         # 2. Cast rays and draw walls to frame buffer
         self._draw_walls(player, level.grid, level.grid_cols, level.grid_rows)
 
-        # 3. Create render surface and blit frame buffer
-        # Use subsurface if screen is larger than render area
-        screen_w, screen_h = screen.get_size()
-        if screen_w == self.screen_width and screen_h == self.render_height:
-            # Same size - blit directly
-            pygame.surfarray.blit_array(screen, self.frame_buffer)
-            render_surface = screen
-        else:
-            # Different size - create temp surface
-            render_surface = pygame.Surface((self.screen_width, self.render_height))
-            pygame.surfarray.blit_array(render_surface, self.frame_buffer)
-            screen.blit(render_surface, (0, 0))
+        # 3. Blit internal frame buffer to internal render surface
+        pygame.surfarray.blit_array(self._render_surface, self.frame_buffer)
 
-        # 4. Draw entities (sprites) directly to screen
-        self._draw_entities(screen, player, level, fog_manager)
+        # 4. Draw entities on the same internal surface (shares z-buffer resolution)
+        self._draw_entities(self._render_surface, player, level, fog_manager)
+
+        # 5. Present to target render area
+        if self.internal_width == self.screen_width and self.internal_height == self.render_height:
+            screen.blit(self._render_surface, (0, 0))
+        else:
+            pygame.transform.scale(
+                self._render_surface,
+                (self.screen_width, self.render_height),
+                self._scaled_surface
+            )
+            screen.blit(self._scaled_surface, (0, 0))
+
+        # 6. Adaptive quality based on current frame time
+        elapsed_ms = float(pygame.time.get_ticks() - frame_start)
+        self._update_adaptive_quality(elapsed_ms)
 
     def _draw_ceiling_floor(self, player):
         """Draw perspective floor and ceiling with checkerboard pattern"""
@@ -644,10 +744,10 @@ class Renderer3D:
         angle = player.angle
         half_fov = self.raycaster.half_fov_rad
 
-        pitch_offset = int(player.pitch * self.render_height * 0.5)
+        pitch_offset = int(player.pitch * self.internal_height * 0.5)
 
         _numba_draw_floor_ceiling(
-            self.frame_buffer, self.render_height, self.screen_width,
+            self.frame_buffer, self.internal_height, self.internal_width,
             px, py, angle, half_fov, int32(pitch_offset)
         )
 
@@ -660,13 +760,13 @@ class Renderer3D:
         ray_results = self.raycaster.cast_all_rays_grid(
             grid, grid_rows, grid_cols, px, py, angle)
 
-        pitch_offset = int(player.pitch * self.render_height * 0.5)
+        pitch_offset = int(player.pitch * self.internal_height * 0.5)
 
         # Call Numba JIT function
         _numba_draw_walls(
             ray_results, self.frame_buffer,
             self._tex_ns, self._tex_ew,
-            int32(self.render_height), int32(self.texture_manager.texture_size),
+            int32(self.internal_height), int32(self.texture_manager.texture_size),
             self.z_buffer, int32(pitch_offset)
         )
 
@@ -775,6 +875,8 @@ class Renderer3D:
         """Draw a single sprite using pre-rendered surface with Y-shearing"""
         px, py = player.world_x, player.world_y
         p_angle = player.angle
+        view_w = self.internal_width
+        view_h = self.internal_height
 
         dx = sprite['x'] - px
         dy = sprite['y'] - py
@@ -794,10 +896,10 @@ class Renderer3D:
             return  # Behind player
 
         # Calculate screen position (FOV korreksiyali)
-        sprite_screen_x = int((self.screen_width / 2) * (1 + transform_x / transform_y * self._sprite_fov_factor))
+        sprite_screen_x = int((view_w / 2) * (1 + transform_x / transform_y * self._sprite_fov_factor))
 
         # Y-shearing for sprite
-        h = self.render_height
+        h = view_h
         pitch_offset = int(player.pitch * h * 0.5)
         horizon = h // 2 + pitch_offset
         base_size = sprite['size']
@@ -813,21 +915,21 @@ class Renderer3D:
         sprite_width = max(sprite_width, 8)
 
         # Clamp size
-        sprite_width = min(sprite_width, self.screen_width * 2)
-        sprite_height = min(sprite_height, self.render_height * 2)
+        sprite_width = min(sprite_width, view_w * 2)
+        sprite_height = min(sprite_height, view_h * 2)
 
         draw_x = sprite_screen_x - sprite_width // 2
         draw_y = horizon - sprite_height // 2
 
         # Check if on screen
-        if draw_x + sprite_width < 0 or draw_x >= self.screen_width:
+        if draw_x + sprite_width < 0 or draw_x >= view_w:
             return
-        if draw_y + sprite_height < 0 or draw_y >= self.render_height:
+        if draw_y + sprite_height < 0 or draw_y >= view_h:
             return
 
         # Check z-buffer for visibility
         screen_x_start = max(0, draw_x)
-        screen_x_end = min(self.screen_width, draw_x + sprite_width)
+        screen_x_end = min(view_w, draw_x + sprite_width)
 
         visible = False
         for x in range(screen_x_start, screen_x_end):
@@ -838,8 +940,8 @@ class Renderer3D:
         if not visible:
             return
 
-        # Scale sprite surface (smoothscale for better quality at small sizes)
-        if sprite_width <= 256 and sprite_height <= 256:
+        # Scale sprite surface (favor speed in fullscreen/high-res scenes).
+        if self._internal_scale >= 0.95 and sprite_width <= 96 and sprite_height <= 96:
             scaled = pygame.transform.smoothscale(sprite['surface'], (sprite_width, sprite_height))
         else:
             scaled = pygame.transform.scale(sprite['surface'], (sprite_width, sprite_height))

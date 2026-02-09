@@ -12,7 +12,7 @@ from utils.constants import TOP, RIGHT, BOTTOM, LEFT
 
 @njit(cache=True)
 def _numba_cast_all_rays_grid(grid, grid_rows, grid_cols,
-                               px, py, ray_angles, fish_eye_table, results):
+                               px, py, start_angle, angle_step, fish_eye_table, results):
     """
     Grid ustida oddiy DDA ray casting (lodev.org standarti).
 
@@ -20,7 +20,8 @@ def _numba_cast_all_rays_grid(grid, grid_rows, grid_cols,
         grid: 2D int8 massiv (grid_rows, grid_cols), 1=solid, 0=bo'sh
         grid_rows, grid_cols: grid o'lchamlari
         px, py: o'yinchi pozitsiyasi grid koordinatalarida
-        ray_angles: 1D float64 massiv — har bir nurning burchagi
+        start_angle: birinchi nurning burchagi (radyan)
+        angle_step: nurlar orasidagi burchak qadam (radyan)
         fish_eye_table: 1D float64 massiv — baliq ko'zi korreksiyasi
         results: (num_rays, 6) float64 massiv — natija yoziladigan joy
     """
@@ -29,8 +30,9 @@ def _numba_cast_all_rays_grid(grid, grid_rows, grid_cols,
     bottom = int32(4)
     left = int32(8)
 
-    for i in range(len(ray_angles)):
-        angle = ray_angles[i]
+    num_rays = results.shape[0]
+    for i in range(num_rays):
+        angle = start_angle + float64(i) * angle_step
         ray_dir_x = math.cos(angle)
         ray_dir_y = math.sin(angle)
 
@@ -170,17 +172,16 @@ class Raycaster:
             numpy array shape (num_rays, 6):
             [dist, side, hit_x, hit_y, wall_dir, corrected_dist]
         """
-        # Ray angles massivini hisoblash
+        # Har bir ray burchagini Numba ichida hisoblaymiz:
+        # angle = start_angle + i * angle_step
         angle_step = self.fov_rad / self.num_rays
         start_angle = player_angle - self.half_fov_rad
-        ray_angles = np.empty(self.num_rays, dtype=np.float64)
-        for i in range(self.num_rays):
-            ray_angles[i] = start_angle + i * angle_step
 
         _numba_cast_all_rays_grid(
             grid, int32(grid_rows), int32(grid_cols),
             float64(px), float64(py),
-            ray_angles, self._fish_eye_table, self._results
+            float64(start_angle), float64(angle_step),
+            self._fish_eye_table, self._results
         )
         return self._results
 
