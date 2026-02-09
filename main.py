@@ -1424,9 +1424,47 @@ class MazeGame:
         Floor snapping keeps shared wall edges stable while camera moves.
         """
         camera = self.camera_manager.camera
-        sx = int(math.floor((world_x - camera.camera_x) * self.cell_size))
-        sy = int(math.floor((world_y - camera.camera_y) * self.cell_size))
+        origin_x, origin_y = self._get_2d_render_origin()
+        sx = origin_x + int(math.floor((world_x - camera.camera_x) * self.cell_size))
+        sy = origin_y + int(math.floor((world_y - camera.camera_y) * self.cell_size))
         return sx, sy
+
+    def _get_2d_render_origin(self):
+        """
+        Get top-left origin for 2D maze rendering.
+        In non-camera mode, center the maze inside available maze area.
+        """
+        camera = self.camera_manager.camera
+        if camera.use_camera:
+            return 0, 0
+
+        level = self.level_manager.get_current_level()
+        if not level:
+            return 0, 0
+
+        panel_h = self._get_panel_height(self.screen_h)
+        maze_area_h = max(0, self.screen_h - panel_h)
+        maze_px_w = level.cols * self.cell_size
+        maze_px_h = level.rows * self.cell_size
+
+        origin_x = max(0, (self.screen_w - maze_px_w) // 2)
+        origin_y = max(0, (maze_area_h - maze_px_h) // 2)
+        return origin_x, origin_y
+
+    def _get_2d_maze_rect(self, level=None):
+        """Get maze rectangle in screen coordinates for current 2D render mode."""
+        maze_h = self.camera_manager.get_maze_area_height()
+        camera = self.camera_manager.camera
+        if camera.use_camera:
+            return pygame.Rect(0, 0, self.screen_w, maze_h)
+
+        if level is None:
+            level = self.level_manager.get_current_level()
+        if not level:
+            return pygame.Rect(0, 0, self.screen_w, maze_h)
+
+        ox, oy = self._get_2d_render_origin()
+        return pygame.Rect(ox, oy, level.cols * self.cell_size, level.rows * self.cell_size)
 
     def _get_2d_wall_width(self):
         """Get 2D wall stroke width in pixels for current cell size."""
@@ -1658,8 +1696,8 @@ class MazeGame:
             if not self.camera_manager.is_visible(cell_x, cell_y):
                 continue
 
-            # Convert to screen coordinates
-            sx, sy = self.camera_manager.world_to_screen(cell_x, cell_y)
+            # Convert to screen coordinates (includes non-camera centering offset)
+            sx, sy = self._world_to_screen_grid(cell_x, cell_y)
 
             # Scale particle size based on cell size ratio
             scale = self.cell_size / base_cell_size
@@ -1743,13 +1781,86 @@ class MazeGame:
 
         map_w = max(150, map_w)
         map_h = max(110, map_h)
-        map_x = self.screen_w - map_w - pad
-        map_y = pad
-        if map_y + map_h > maze_h - 8:
-            map_y = max(8, maze_h - map_h - 8)
+        maze_rect = self._get_2d_maze_rect(level)
+        body_pad = 8
 
-        header_h = 20 if map_h < 190 else 24
-        card_rect = pygame.Rect(map_x - 10, map_y - (header_h + 8), map_w + 20, map_h + header_h + 14)
+        def _layout_for_size(mw, mh):
+            """Pick minimap position that avoids maze overlap when possible."""
+            header = 20 if mh < 190 else 24
+            min_y = header + body_pad
+            max_y = max(min_y, maze_h - mh - body_pad)
+
+            def _clamp_pos(px, py):
+                px = max(body_pad, min(self.screen_w - mw - body_pad, int(px)))
+                py = max(min_y, min(max_y, int(py)))
+                return px, py
+
+            candidates = [
+                _clamp_pos(self.screen_w - mw - pad, pad + header),              # top-right
+                _clamp_pos(body_pad, pad + header),                               # top-left
+                _clamp_pos(self.screen_w - mw - pad, maze_h - mh - body_pad),    # bottom-right
+                _clamp_pos(body_pad, maze_h - mh - body_pad),                     # bottom-left
+                _clamp_pos((self.screen_w - mw) // 2, pad + header),              # top-center
+                _clamp_pos((self.screen_w - mw) // 2, maze_h - mh - body_pad),    # bottom-center
+            ]
+
+            best = None
+            for px, py in candidates:
+                card = pygame.Rect(px - 10, py - (header + 8), mw + 20, mh + header + 14)
+                overlap = card.clip(maze_rect)
+                overlap_area = overlap.w * overlap.h
+                pref = abs((px + mw) - (self.screen_w - pad)) + abs(py - (pad + header))
+                score = (overlap_area, pref)
+                if best is None or score < best[0]:
+                    best = (score, px, py, header, card)
+            return best
+
+        max_body_h = max(110, maze_h - (24 + body_pad * 2))
+        side_free_w = int(max(maze_rect.left, self.screen_w - maze_rect.right) - (body_pad + 12))
+        band_free_h = int(max(maze_rect.top, maze_h - maze_rect.bottom) - (body_pad + 12))
+
+        size_candidates = {(map_w, map_h)}
+
+        if side_free_w >= 150:
+            side_w = min(map_w, side_free_w)
+            side_h = max(110, int(side_w / maze_ratio))
+            if side_h > max_body_h:
+                side_h = max_body_h
+                side_w = int(side_h * maze_ratio)
+            if side_w >= 150 and side_h >= 110:
+                size_candidates.add((side_w, side_h))
+
+        if band_free_h >= 110:
+            band_h = min(map_h, band_free_h)
+            band_w = max(150, int(band_h * maze_ratio))
+            max_fit_w = self.screen_w - (body_pad + 12) * 2
+            if band_w > max_fit_w:
+                band_w = max_fit_w
+                band_h = int(band_w / maze_ratio)
+            if band_w >= 150 and band_h >= 110:
+                size_candidates.add((band_w, band_h))
+
+        best_layout = None
+        best_area = -1
+        for mw, mh in size_candidates:
+            layout = _layout_for_size(mw, mh)
+            if best_layout is None:
+                best_layout = (layout, mw, mh)
+                best_area = mw * mh
+                continue
+
+            curr_score = layout[0]
+            best_score = best_layout[0][0]
+            curr_area = mw * mh
+            if curr_score < best_score:
+                best_layout = (layout, mw, mh)
+                best_area = curr_area
+            elif curr_score == best_score and curr_area > best_area:
+                best_layout = (layout, mw, mh)
+                best_area = curr_area
+
+        layout, map_w, map_h = best_layout
+        _, map_x, map_y, header_h, card_rect = layout
         card = pygame.Surface((card_rect.w, card_rect.h), pygame.SRCALPHA)
         pygame.draw.rect(card, (22, 26, 34, 228), (0, 0, card_rect.w, card_rect.h), border_radius=12)
         pygame.draw.rect(card, (88, 98, 118, 235), (0, 0, card_rect.w, card_rect.h), 1, border_radius=12)

@@ -22,7 +22,8 @@ class Camera:
 
         # Cell size limits
         self.min_cell_size = 12  # Minimum readable cell size
-        self.max_cell_size = 50  # Maximum cell size
+        # Allow larger cells so fullscreen 2D uses space better on big monitors.
+        self.max_cell_size = 96
         self.default_cell_size = 35
 
         # Calculated values
@@ -236,9 +237,7 @@ class Camera:
 
     def get_maze_area_height(self):
         """Get the height of the maze rendering area in pixels"""
-        if self.use_camera:
-            return self.screen_height - self.panel_height
-        return self.maze_rows * self.cell_size
+        return max(0, self.screen_height - self.panel_height)
 
     def reset(self):
         """Reset camera to origin"""
