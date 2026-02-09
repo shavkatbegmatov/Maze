@@ -167,28 +167,20 @@ class MazeGame:
         return max(96, min(170, int(h * 0.18)))
 
     def _resize_screen_for_level(self, level):
-        """Resize screen to fit level using camera system"""
-        panel_h = self._get_panel_height(self.screen_h)
+        """Configure camera/cell size for current window without resizing the window."""
+        screen_w, screen_h = self.display_manager.get_size()
+        panel_h = self._get_panel_height(screen_h)
 
-        # In fullscreen mode, don't resize window - just recalculate cell size
-        if self.display_manager.is_fullscreen():
-            screen_w, screen_h = self.display_manager.get_size()
-            panel_h = self._get_panel_height(screen_h)
-            cell_size, use_camera = self.camera_manager.handle_screen_resize(
-                screen_w, screen_h, panel_h
-            )
-            # Update maze info in camera
-            self.camera_manager.camera.maze_cols = level.cols
-            self.camera_manager.camera.maze_rows = level.rows
-            self.cell_size = cell_size
-        else:
-            # Let camera calculate optimal settings for windowed mode
-            screen_w, screen_h, cell_size, use_camera = self.camera_manager.setup_for_level(
-                level.cols, level.rows, panel_h
-            )
-
-            self.cell_size = cell_size
-            self._create_screen(screen_w, screen_h)
+        # Keep current window size (including maximized/fullscreen) and only recalc camera.
+        self.camera_manager.camera.maze_cols = level.cols
+        self.camera_manager.camera.maze_rows = level.rows
+        cell_size, use_camera = self.camera_manager.handle_screen_resize(
+            screen_w, screen_h, panel_h
+        )
+        self.cell_size = cell_size
+        self.screen_w = screen_w
+        self.screen_h = screen_h
+        self.screen = self.display_manager.get_screen()
 
         # Reset camera position
         self.camera_manager.reset()
