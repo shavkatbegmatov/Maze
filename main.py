@@ -1456,7 +1456,11 @@ class MazeGame:
         maze_h = self.camera_manager.get_maze_area_height()
         camera = self.camera_manager.camera
         if camera.use_camera:
-            return pygame.Rect(0, 0, self.screen_w, maze_h)
+            vw = int(max(0, camera.viewport_cols * self.cell_size))
+            vh = int(max(0, camera.viewport_rows * self.cell_size))
+            if vw <= 0 or vh <= 0:
+                return pygame.Rect(0, 0, self.screen_w, maze_h)
+            return pygame.Rect(0, 0, min(self.screen_w, vw), min(maze_h, vh))
 
         if level is None:
             level = self.level_manager.get_current_level()
@@ -1779,13 +1783,74 @@ class MazeGame:
             map_w = max_map_w
             map_h = int(map_w / maze_ratio)
 
-        map_w = max(150, map_w)
-        map_h = max(110, map_h)
+        min_map_w = 120
+        min_map_h = 88
+        map_w = max(min_map_w, map_w)
+        map_h = max(min_map_h, map_h)
         maze_rect = self._get_2d_maze_rect(level)
         body_pad = 8
 
+        def _normalized_size(target_w):
+            """Normalize minimap size preserving maze aspect ratio."""
+            w = max(min_map_w, int(target_w))
+            h = max(min_map_h, int(round(w / maze_ratio)))
+            return w, h
+
+        def _place_in_free_strip(mw, mh):
+            """
+            Place minimap card fully outside maze when free strip is large enough.
+            Returns (map_x, map_y, header_h, card_rect) or None.
+            """
+            header_h = 20 if mh < 190 else 24
+            card_w = mw + 20
+            card_h = mh + header_h + 14
+
+            strips = []
+            right_w = self.screen_w - (maze_rect.right + body_pad) - body_pad
+            right_h = maze_h - body_pad * 2
+            strips.append(("right", maze_rect.right + body_pad, body_pad, right_w, right_h))
+
+            left_w = maze_rect.left - body_pad * 2
+            left_h = maze_h - body_pad * 2
+            strips.append(("left", body_pad, body_pad, left_w, left_h))
+
+            top_w = self.screen_w - body_pad * 2
+            top_h = maze_rect.top - body_pad * 2
+            strips.append(("top", body_pad, body_pad, top_w, top_h))
+
+            bottom_y = maze_rect.bottom + body_pad
+            bottom_w = self.screen_w - body_pad * 2
+            bottom_h = maze_h - bottom_y - body_pad
+            strips.append(("bottom", body_pad, bottom_y, bottom_w, bottom_h))
+
+            for name, sx, sy, sw, sh in strips:
+                if sw < card_w or sh < card_h:
+                    continue
+
+                if name == "right":
+                    card_x = sx + sw - card_w
+                    card_y = sy
+                elif name == "left":
+                    card_x = sx
+                    card_y = sy
+                elif name == "top":
+                    card_x = sx + sw - card_w
+                    card_y = sy
+                else:
+                    card_x = sx + sw - card_w
+                    card_y = sy + sh - card_h
+
+                return (
+                    card_x + 10,
+                    card_y + header_h + 8,
+                    header_h,
+                    pygame.Rect(card_x, card_y, card_w, card_h),
+                )
+
+            return None
+
         def _layout_for_size(mw, mh):
-            """Pick minimap position that avoids maze overlap when possible."""
+            """Fallback: minimize overlap if full non-overlap placement is impossible."""
             header = 20 if mh < 190 else 24
             min_y = header + body_pad
             max_y = max(min_y, maze_h - mh - body_pad)
@@ -1815,52 +1880,63 @@ class MazeGame:
                     best = (score, px, py, header, card)
             return best
 
-        max_body_h = max(110, maze_h - (24 + body_pad * 2))
-        side_free_w = int(max(maze_rect.left, self.screen_w - maze_rect.right) - (body_pad + 12))
-        band_free_h = int(max(maze_rect.top, maze_h - maze_rect.bottom) - (body_pad + 12))
+        size_candidates = []
+        seen_sizes = set()
 
-        size_candidates = {(map_w, map_h)}
+        def _add_size(w, h):
+            w = int(max(min_map_w, w))
+            h = int(max(min_map_h, h))
+            key = (w, h)
+            if key not in seen_sizes:
+                seen_sizes.add(key)
+                size_candidates.append(key)
 
-        if side_free_w >= 150:
-            side_w = min(map_w, side_free_w)
-            side_h = max(110, int(side_w / maze_ratio))
-            if side_h > max_body_h:
-                side_h = max_body_h
-                side_w = int(side_h * maze_ratio)
-            if side_w >= 150 and side_h >= 110:
-                size_candidates.add((side_w, side_h))
+        _add_size(map_w, map_h)
+        for scale in (0.9, 0.8, 0.7, 0.6):
+            sw, sh = _normalized_size(map_w * scale)
+            _add_size(sw, sh)
 
-        if band_free_h >= 110:
-            band_h = min(map_h, band_free_h)
-            band_w = max(150, int(band_h * maze_ratio))
-            max_fit_w = self.screen_w - (body_pad + 12) * 2
-            if band_w > max_fit_w:
-                band_w = max_fit_w
-                band_h = int(band_w / maze_ratio)
-            if band_w >= 150 and band_h >= 110:
-                size_candidates.add((band_w, band_h))
+        side_space_w = max(0, max(maze_rect.left, self.screen_w - maze_rect.right) - (body_pad * 2 + 20))
+        if side_space_w > 0:
+            sw, sh = _normalized_size(side_space_w)
+            _add_size(sw, sh)
 
-        best_layout = None
-        best_area = -1
-        for mw, mh in size_candidates:
-            layout = _layout_for_size(mw, mh)
-            if best_layout is None:
-                best_layout = (layout, mw, mh)
-                best_area = mw * mh
-                continue
+        band_space_h = max(0, max(maze_rect.top, maze_h - maze_rect.bottom) - (body_pad * 2 + 24 + 14))
+        if band_space_h > 0:
+            bw = int(round(band_space_h * maze_ratio))
+            _add_size(bw, band_space_h)
 
-            curr_score = layout[0]
-            best_score = best_layout[0][0]
-            curr_area = mw * mh
-            if curr_score < best_score:
-                best_layout = (layout, mw, mh)
-                best_area = curr_area
-            elif curr_score == best_score and curr_area > best_area:
-                best_layout = (layout, mw, mh)
-                best_area = curr_area
+        placed = None
+        for mw, mh in sorted(size_candidates, key=lambda size: size[0] * size[1], reverse=True):
+            candidate = _place_in_free_strip(mw, mh)
+            if candidate is not None:
+                map_x, map_y, header_h, card_rect = candidate
+                map_w, map_h = mw, mh
+                placed = True
+                break
 
-        layout, map_w, map_h = best_layout
-        _, map_x, map_y, header_h, card_rect = layout
+        if not placed:
+            best_layout = None
+            best_area = -1
+            for mw, mh in size_candidates:
+                layout = _layout_for_size(mw, mh)
+                if best_layout is None:
+                    best_layout = (layout, mw, mh)
+                    best_area = mw * mh
+                    continue
+
+                curr_score = layout[0]
+                best_score = best_layout[0][0]
+                curr_area = mw * mh
+                if curr_score < best_score:
+                    best_layout = (layout, mw, mh)
+                    best_area = curr_area
+                elif curr_score == best_score and curr_area > best_area:
+                    best_layout = (layout, mw, mh)
+                    best_area = curr_area
+
+            layout, map_w, map_h = best_layout
+            _, map_x, map_y, header_h, card_rect = layout
         card = pygame.Surface((card_rect.w, card_rect.h), pygame.SRCALPHA)
         pygame.draw.rect(card, (22, 26, 34, 228), (0, 0, card_rect.w, card_rect.h), border_radius=12)
         pygame.draw.rect(card, (88, 98, 118, 235), (0, 0, card_rect.w, card_rect.h), 1, border_radius=12)
